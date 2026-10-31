@@ -1,4 +1,4 @@
-﻿# Lesson 9: Proactive alerts - nayi release -> matching users ko unki bhasha mein
+# Lesson 9: Proactive alerts - nayi release -> matching users ko unki bhasha mein
 
 import asyncio
 import json
@@ -13,6 +13,7 @@ from telegram.ext import CommandHandler
 from collector import already_saved, fetch_feed, fetch_text, get_prid, save
 from collector import setup_db as setup_releases
 from voice import text_to_speech, verified_summary, voice_script
+from audio_util import send_clip
 
 DB_FILE = "practice.db"
 MAX_PER_RUN = int(os.environ.get("ALERT_MAX_PER_RUN", "2"))     # ek baar mein kitni releases
@@ -138,8 +139,7 @@ async def deliver(bot, deliveries, card_fn):
             await bot.send_message(d["uid"], card_fn(d["title"], d["link"], d["summary"]),
                                    parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             if d["audio"]:
-                with open(d["audio"], "rb") as f:
-                    await bot.send_audio(d["uid"], f, title="Nayi khabar (AI awaaz)")
+                await send_clip(bot, d["uid"], d["audio"], "Nayi khabar (AI awaaz)")
             mark_sent(d["uid"], d["prid"])
             sent += 1
         except Exception as err:

@@ -1,4 +1,4 @@
-﻿# Lesson 8: Bot - onboarding + /khabar (verified summary + voice note)
+# Lesson 8: Bot - onboarding + /khabar (verified summary + voice note)
 
 import asyncio
 import html
@@ -13,6 +13,7 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 
 from voice import text_to_speech, verified_summary, voice_script
 from alerts import register_alerts
+from audio_util import send_clip
 
 DB_FILE = "practice.db"
 
@@ -163,8 +164,7 @@ async def khabar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Awaaz abhi nahi ban paayi, upar likhi khabar padhein.")
             return
 
-    with open(audio_path, "rb") as f:
-        await update.message.reply_audio(f, title="Khabar (AI awaaz)")
+    await send_clip(context.bot, update.effective_chat.id, audio_path, "Khabar (AI awaaz)")
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
