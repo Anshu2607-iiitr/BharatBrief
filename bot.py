@@ -12,6 +12,7 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
                           ContextTypes, MessageHandler, filters)
 
 from voice import text_to_speech, verified_summary, voice_script
+from alerts import register_alerts
 
 DB_FILE = "practice.db"
 
@@ -181,6 +182,7 @@ def main():
     app.add_handler(CommandHandler("me", me))
     app.add_handler(CommandHandler("khabar", khabar))
     app.add_handler(CallbackQueryHandler(on_button))
+    register_alerts(app, summary_card)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
     print("Bot chal raha hai... band karne ke liye Ctrl+C (na chale to: taskkill /IM python.exe /F)")
     app.run_polling()
