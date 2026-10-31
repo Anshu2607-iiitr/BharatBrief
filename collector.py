@@ -9,6 +9,8 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
+from trace_log import log_event, simulate_pib_down
+
 FEED_URL = "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=2&Regid=3"
 DB_FILE = "practice.db"
 HEADERS = {
@@ -59,6 +61,10 @@ def get(url):
 
 
 def fetch_feed():
+    if simulate_pib_down():
+        print("PIB down (demo toggle) - purane data se kaam chalega")
+        log_event("-", "fetch", "fail", "PIB down (demo toggle)")
+        return []
     resp = get(FEED_URL)
     if resp is None or b"<rss" not in resp.content[:500]:
         print("Feed nahi mili, baad mein dobara try karo")

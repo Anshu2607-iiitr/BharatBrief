@@ -1,4 +1,4 @@
-﻿# Lesson 4: Summary - Gemini pehle, busy ho to Groq (fallback), JSON safe parsing
+# Lesson 4: Summary - Gemini pehle, busy ho to Groq (fallback), JSON safe parsing
 
 import json
 import os
@@ -16,6 +16,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 GROQ_MODEL = os.environ.get("GROQ_MODEL") or pick_groq_model()
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 RETRY_CODES = ("503", "429", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED")
+LAST_PROVIDER = ""
 
 LANGUAGES = {
     "hi": "Hindi", "en": "English", "bn": "Bengali", "ta": "Tamil",
@@ -144,6 +145,8 @@ def summarize(title, text, lang_code):
         raw = call(contents)
         summary = parse_json(raw)
         if summary:
+            global LAST_PROVIDER
+            LAST_PROVIDER = provider
             print(f"  Summary {provider} se bani")
             return summary
         if raw:

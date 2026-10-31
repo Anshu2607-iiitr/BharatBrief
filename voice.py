@@ -1,4 +1,4 @@
-﻿# Lesson 7: Verified summary ko Sarvam TTS se voice note banana
+# Lesson 7: Verified summary ko Sarvam TTS se voice note banana
 
 import base64
 import os
@@ -7,6 +7,8 @@ import sys
 import requests
 
 from summarize import get_release, summarize
+import summarize as summarize_mod
+from trace_log import log_event
 from verify import facts_from_original, check
 
 SARVAM_URL = "https://api.sarvam.ai/text-to-speech"
@@ -39,11 +41,14 @@ def verified_summary(prid, lang):
     for attempt in (1, 2):
         summary = summarize(title, text + feedback, lang)
         if not summary:
+            log_event(prid, "summary", "fail", f"{lang}: Gemini aur Groq dono fail")
             return None
         problems = check(summary, dates, numbers)
         if not problems:
+            log_event(prid, "verify", "ok", f"{lang} · koshish {attempt} · {summarize_mod.LAST_PROVIDER}")
             print(f"Summary verified (koshish {attempt})")
             return summary
+        log_event(prid, "verify", "fail", f"{lang} · koshish {attempt}: " + "; ".join(problems))
         print(f"Koshish {attempt} fail:", problems)
         feedback = ("\n\nIMPORTANT: Your previous summary had these errors: "
                     + "; ".join(problems)

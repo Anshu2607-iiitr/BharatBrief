@@ -13,6 +13,7 @@ from telegram.ext import CommandHandler
 from collector import already_saved, fetch_feed, fetch_text, get_prid, save
 from collector import setup_db as setup_releases
 from voice import text_to_speech, verified_summary, voice_script
+from trace_log import log_event
 from audio_util import send_clip
 
 DB_FILE = "practice.db"
@@ -99,7 +100,9 @@ def run_once():
     """Ek round: nayi releases laao aur bhejne layak messages taiyaar karo."""
     conn = setup_releases()
     setup_alert_tables(conn)
-    print(f"[alert] Nayi releases: {collect_new(conn)}")
+    new = collect_new(conn)
+    log_event("-", "fetch", "ok", f"{new} nayi releases")
+    print(f"[alert] Nayi releases: {new}")
 
     deliveries = []
     for prid, title, link in pending_releases(conn):
@@ -112,6 +115,7 @@ def run_once():
 
         audience = str(base.get("kiske_liye", "sabhi")).strip().lower()
         users = [(u, l) for u, l in matching_users(conn, audience) if not already_sent(conn, u, prid)]
+        log_event(prid, "match", "ok", f"{audience} · {len(users)} users")
         print(f"[alert] {prid}: kiske_liye={audience}, users={len(users)}")
 
         for uid, lang in users:
@@ -141,8 +145,10 @@ async def deliver(bot, deliveries, card_fn):
             if d["audio"]:
                 await send_clip(bot, d["uid"], d["audio"], "Nayi khabar (AI awaaz)")
             mark_sent(d["uid"], d["prid"])
+            log_event(d["prid"], "send", "ok", "voice + card bheja")
             sent += 1
         except Exception as err:
+            log_event(d["prid"], "send", "fail", str(err))
             print(f"[alert] {d['uid']} ko bhejne mein dikkat:", err)
     return sent
 
