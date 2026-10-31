@@ -1,8 +1,9 @@
-﻿# Website - user friendly: apni bhasha ka UI, progress steps, awaaz upar
+﻿# Website - time ke saath, din ke hisaab se, summary pehle se taiyaar
 
 import html
+import json
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
@@ -15,28 +16,34 @@ from voice import text_to_speech, voice_script
 st.set_page_config(page_title="BharatBrief", page_icon="📰", layout="centered")
 start_updater_once()
 
-# ---------- Look ----------
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Mukta:wght@400;600;700&display=swap');
 p, h1, h2, h3, h4, label, li, a, button, input { font-family: 'Mukta', system-ui, sans-serif !important; }
 footer { visibility: hidden; }
-.bb-hero { background:#0E6B50; color:#fff; border-radius:16px; padding:20px 22px; margin-bottom:14px; }
-.bb-hero h1 { color:#fff; font-size:30px; margin:0; padding:0; }
-.bb-hero p { color:#fff; margin:4px 0 0; opacity:.92; font-size:17px; }
+.stApp, [data-testid='stAppViewContainer'], [data-testid='stHeader'] { background:#F7F4EE !important; }
+.stApp p, .stApp label, .stApp li, .stApp span { color:#1F1D1A; }
+[data-testid='stVerticalBlockBorderWrapper'] { background:#FFFFFF; border-color:#DED8CC !important; }
+button[kind='primary'], [data-testid='stBaseButton-primary'] { background:#0E6B50 !important; border-color:#0E6B50 !important; }
+button[kind='primary'] p { color:#FFFFFF !important; }
+.bb-hero { background:#0E6B50; border-radius:16px; padding:20px 22px; margin-bottom:14px; }
+.bb-hero h1 { color:#FFFFFF !important; font-size:30px; margin:0; padding:0; }
+.bb-hero p { color:#FFFFFF !important; margin:4px 0 0; opacity:.92; font-size:17px; }
+.bb-day { font-size:15px; font-weight:700; color:#0A4F3B !important; margin:18px 0 6px;
+          border-bottom:2px solid #A9CFBF; padding-bottom:4px; }
 .bb-badge { display:inline-block; font-size:13px; font-weight:600; padding:2px 10px;
-            border-radius:999px; background:#FBEBCB; color:#5A3A00; }
-.bb-title { font-size:19px; font-weight:700; line-height:1.45; margin:8px 0 4px; color:#1F1D1A; }
-.bb-sum { background:#fff; border:1px solid #DED8CC; border-radius:12px; padding:12px 14px; margin:8px 0; }
-.bb-sum h4 { margin:10px 0 2px; font-size:15px; color:#0A4F3B; }
+            border-radius:999px; background:#FBEBCB; color:#5A3A00 !important; margin-right:8px; }
+.bb-time { font-size:13.5px; color:#5F5A52 !important; }
+.bb-title { font-size:19px; font-weight:700; line-height:1.45; margin:6px 0 4px; color:#1F1D1A !important; }
+.bb-sum { background:#FFFFFF; border:1px solid #DED8CC; border-radius:12px; padding:12px 14px; margin:8px 0; }
+.bb-sum h4 { margin:10px 0 2px; font-size:15px; color:#0A4F3B !important; }
 .bb-sum h4:first-child { margin-top:0; }
-.bb-sum p { margin:0; font-size:17px; line-height:1.6; color:#1F1D1A; }
-.bb-check { font-size:14px; color:#0A4F3B; background:#E4F2EC; border-radius:8px; padding:6px 10px; margin-top:10px; }
-.bb-meta { font-size:13.5px; color:#5F5A52; }
+.bb-sum p { margin:0; font-size:17px; line-height:1.6; }
+.bb-check { font-size:14px; color:#0A4F3B !important; background:#E4F2EC; border-radius:8px; padding:6px 10px; margin-top:10px; }
+.bb-meta { font-size:13.5px; color:#5F5A52 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Har bhasha ke UI shabd ----------
 LABELS = {
     "hi": dict(tagline="सरकारी खबरें, आपकी भाषा में, आसान शब्दों में।", kya="क्या हुआ", asar="आप पर असर",
                karna="आपको क्या करना है", explain="आसान भाषा में समझाएं", original="मूल खबर पढ़ें (PIB)",
@@ -114,19 +121,32 @@ def last_fetch_time():
     return datetime.fromisoformat(row[0]) if row else None
 
 
-def latest_releases(n=8):
+def latest_releases(n=20):
     conn = setup_releases()
     setup_alert_tables(conn)
     rows = conn.execute("""
-        SELECT r.prid, r.title, r.link, p.audience
-        FROM releases r LEFT JOIN processed p ON p.prid = r.prid
+        SELECT r.prid, r.title, r.link,
+               NULLIF(r.posted_at, 'unknown') AS posted, r.fetched_at,
+               json_extract(s.json, '$.kiske_liye') AS audience
+        FROM releases r
+        LEFT JOIN summaries s ON s.prid = r.prid AND s.lang = 'hi'
         WHERE r.full_text != ''
-        ORDER BY CAST(r.prid AS INTEGER) DESC LIMIT ?""", (n,)).fetchall()
+        ORDER BY COALESCE(NULLIF(r.posted_at, 'unknown'), r.fetched_at) DESC
+        LIMIT ?""", (n,)).fetchall()
     conn.close()
     return rows
 
 
-def get_summary(prid, lang):
+def cached_only(prid, lang):
+    """Sirf cache se padho, AI call nahi."""
+    conn = setup_releases()
+    setup_alert_tables(conn)
+    row = conn.execute("SELECT json FROM summaries WHERE prid = ? AND lang = ?", (prid, lang)).fetchone()
+    conn.close()
+    return json.loads(row[0]) if row else None
+
+
+def make_summary(prid, lang):
     conn = setup_releases()
     setup_alert_tables(conn)
     s = cached_summary(conn, prid, lang)
@@ -134,11 +154,8 @@ def get_summary(prid, lang):
     return s
 
 
-def get_audio(prid, lang, summary):
-    path = f"khabar_{prid}_{lang}.wav"
-    if os.path.exists(path) or text_to_speech(voice_script(summary, lang), lang, path):
-        return path
-    return None
+def audio_path(prid, lang):
+    return f"khabar_{prid}_{lang}.wav"
 
 
 def fail_kind(prid):
@@ -147,6 +164,14 @@ def fail_kind(prid):
                        "ORDER BY id DESC LIMIT 1", (prid,)).fetchone()
     conn.close()
     return "verify" if row and row[0] == "verify" else "busy"
+
+
+def day_label(d):
+    if d == date.today():
+        return f"आज · Today · {d:%d %b}"
+    if d == date.today() - timedelta(days=1):
+        return f"कल · Yesterday · {d:%d %b}"
+    return f"{d:%d %b %Y}"
 
 
 def summary_html(s, L):
@@ -168,7 +193,7 @@ st.markdown(f'<div class="bb-hero"><h1>BharatBrief</h1><p>{html.escape(L["taglin
             unsafe_allow_html=True)
 
 
-@st.fragment(run_every=120)
+@st.fragment(run_every=60)
 def news_list(lang, role, L):
     if simulate_pib_down():
         st.warning(L["down"])
@@ -176,54 +201,68 @@ def news_list(lang, role, L):
     top_l, top_r = st.columns([3, 1])
     last = last_fetch_time()
     top_l.markdown(f'<div class="bb-meta">{html.escape(L["last"])}: '
-                   f'{last:%d %b, %H:%M}' if last else '<div class="bb-meta">…', unsafe_allow_html=True)
-    top_l.markdown(f'<div class="bb-meta">{html.escape(L["auto"].format(m=UPDATE_MINUTES))}</div>',
-                   unsafe_allow_html=True)
+                   f'{(last.strftime("%d %b, %I:%M %p") if last else "…")}<br>'
+                   f'{html.escape(L["auto"].format(m=UPDATE_MINUTES))}</div>', unsafe_allow_html=True)
     if top_r.button(L["update"], use_container_width=True):
         with st.spinner(L["working"]):
-            update_once()
+            update_once(force=True, who="button")
         st.rerun()
 
-    shown = 0
-    for prid, title, link, audience in latest_releases():
+    shown, prev_day = 0, None
+    for prid, title, link, posted, fetched, audience in latest_releases():
+        audience = (audience or "").strip().lower() or None
         if role != "sabhi" and audience not in (None, role, "sabhi"):
             continue
         shown += 1
 
+        when = datetime.fromisoformat(posted or fetched)
+        if when.date() != prev_day:
+            prev_day = when.date()
+            st.markdown(f'<div class="bb-day">{html.escape(day_label(prev_day))}</div>', unsafe_allow_html=True)
+
         with st.container(border=True):
             badge = AUDIENCE.get(audience or "", "")
+            time_txt = when.strftime("%I:%M %p") if posted else when.strftime("~%I:%M %p")
             st.markdown((f'<span class="bb-badge">{html.escape(badge)}</span>' if badge else "")
+                        + f'<span class="bb-time">🕒 {time_txt}</span>'
                         + f'<div class="bb-title">{html.escape(title)}</div>', unsafe_allow_html=True)
 
-            key, akey = f"s_{prid}_{lang}", f"a_{prid}_{lang}"
+            key = f"s_{prid}_{lang}"
             if key not in st.session_state:
+                cached = cached_only(prid, lang)            # background ne bana di ho to seedha dikhao
+                if cached:
+                    st.session_state[key] = cached
+
+            s = st.session_state.get(key)
+            if s is None:
                 if st.button(L["explain"], key=f"b_{prid}_{lang}", type="primary", use_container_width=True):
                     with st.status(L["working"], expanded=True) as status:
                         st.write("1. " + L["s1"])
-                        s = get_summary(prid, lang)
+                        s = make_summary(prid, lang)
                         if s:
                             st.write("2. " + L["s2"] + " ✓")
-                            st.write("3. " + L["s3"])
-                            st.session_state[akey] = get_audio(prid, lang, s)
                             status.update(label=L["done"], state="complete", expanded=False)
                         else:
                             status.update(label=L["retry"], state="error", expanded=False)
                     st.session_state[key] = s or "fail"
                     st.rerun()
-
-            s = st.session_state.get(key)
-            if s == "fail":
+            elif s == "fail":
                 st.info(L[fail_kind(prid)])
                 if st.button(L["retry"], key=f"r_{prid}_{lang}", use_container_width=True):
                     del st.session_state[key]
                     st.rerun()
-            elif s:
-                if st.session_state.get(akey):
-                    st.markdown(f'<div class="bb-meta">{html.escape(L["listen"])}</div>', unsafe_allow_html=True)
-                    st.audio(st.session_state[akey])
+            else:
+                path = audio_path(prid, lang)
+                if os.path.exists(path):
+                    st.audio(path)
+                elif st.button(L["listen"], key=f"l_{prid}_{lang}", use_container_width=True):
+                    with st.spinner(L["s3"]):
+                        text_to_speech(voice_script(s, lang), lang, path)
+                    st.rerun()
                 st.markdown(summary_html(s, L), unsafe_allow_html=True)
 
-            st.link_button(L["original"], link, use_container_width=True)
+            st.markdown(f'<a class="bb-meta" href="{html.escape(link)}" target="_blank">'
+                        f'{html.escape(L["original"])} ↗</a>', unsafe_allow_html=True)
 
     if shown == 0:
         st.info(L["none"])

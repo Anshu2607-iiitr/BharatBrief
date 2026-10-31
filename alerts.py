@@ -10,7 +10,7 @@ from datetime import datetime
 from telegram.constants import ParseMode
 from telegram.ext import CommandHandler
 
-from collector import already_saved, fetch_feed, fetch_text, get_prid, save
+from collector import already_saved, fetch_feed, fetch_page, fetch_text, get_prid, save
 from collector import setup_db as setup_releases
 from voice import text_to_speech, verified_summary, voice_script
 from trace_log import log_event
@@ -44,10 +44,10 @@ def collect_new(conn, limit=20):
         prid = get_prid(link)
         if not prid or already_saved(conn, prid):
             continue
-        text = fetch_text(link)
+        text, posted_at = fetch_page(link)
         if not text:
             continue
-        save(conn, prid, e.get("title"), link, text)
+        save(conn, prid, e.get("title"), link, text, posted_at)
         new += 1
         time.sleep(1)
     return new

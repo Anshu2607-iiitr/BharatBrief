@@ -1,0 +1,7 @@
+﻿.env
+*.db
+*.wav
+*.ogg
+*.log
+__pycache__/
+.git/
