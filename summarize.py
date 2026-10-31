@@ -1,14 +1,21 @@
-# Lesson 4: AI se user ki bhasha mein summary banwana
+﻿# Lesson 4: Summary - Gemini pehle, busy ho to Groq (fallback), JSON safe parsing
 
 import json
 import os
+import re
 import sqlite3
 import sys
+import time
 
+import requests
 from google import genai
+from groq_pick import pick_groq_model
 
 DB_FILE = "practice.db"
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+GROQ_MODEL = os.environ.get("GROQ_MODEL") or pick_groq_model()
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+RETRY_CODES = ("503", "429", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED")
 
 LANGUAGES = {
     "hi": "Hindi", "en": "English", "bn": "Bengali", "ta": "Tamil",
@@ -26,7 +33,7 @@ Rules:
 - Each field: 1-2 short sentences.
 - If something is not in the text, write that it is not mentioned, in {language}.
 
-Reply ONLY in this JSON format (keep the keys in English):
+Reply ONLY with a JSON object in this format (keep the keys in English), no other text:
 {{
   "kiske_liye": "kisan | student | msme | mahila | sabhi",
   "prakar": "nayi scheme | deadline | niyam badla | ghoshna | anya",
@@ -50,39 +57,105 @@ def get_release(prid):
     return row
 
 
+def parse_json(raw):
+    """Text se JSON nikalo, chahe aage-peeche kuch extra likha ho."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", raw, re.DOTALL)   # pehle { se aakhri } tak
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+# ---------- Provider 1: Gemini ----------
+def call_gemini(contents, tries=3):
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("  GEMINI_API_KEY set nahi hai")
+        return None
+    client = genai.Client(api_key=api_key, http_options={"timeout": 60000})
+
+    wait = 2
+    for attempt in range(1, tries + 1):
+        try:
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config={"response_mime_type": "application/json"},
+            )
+            return resp.text
+        except Exception as err:
+            busy = any(code in str(err) for code in RETRY_CODES)
+            if busy and attempt < tries:
+                print(f"  Gemini busy hai, {wait}s baad dobara try ({attempt}/{tries})")
+                time.sleep(wait)
+                wait *= 2
+                continue
+            print("  Gemini fail:", str(err)[:200])
+            return None
+
+
+# ---------- Provider 2: Groq (backup) ----------
+def call_groq(contents, json_mode=True):
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key or not GROQ_MODEL:
+        print("  GROQ_API_KEY ya GROQ_MODEL set nahi hai, backup nahi chal sakta")
+        return None
+    body = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": contents}],
+        "temperature": 0.2,
+        "max_tokens": 800,
+    }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    try:
+        resp = requests.post(GROQ_URL, json=body, timeout=60,
+                             headers={"Authorization": f"Bearer {api_key}"})
+    except requests.RequestException as err:
+        print("  Groq network problem:", err)
+        return None
+
+    if resp.status_code == 400 and "json_validate_failed" in resp.text and json_mode:
+        print("  Groq JSON mode fail, bina JSON mode ke dobara try...")
+        return call_groq(contents, json_mode=False)
+    if resp.status_code != 200:
+        print("  Groq error:", resp.status_code, resp.text[:300])
+        return None
+    return resp.json()["choices"][0]["message"]["content"]
+
+
 def summarize(title, text, lang_code):
     language = LANGUAGES.get(lang_code)
     if not language:
         print("Ye bhasha abhi supported nahi:", lang_code)
         return None
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("GEMINI_API_KEY set nahi hai.")
-        return None
+    contents = PROMPT.format(language=language) + "Title: " + title + "\n\n" + text
 
-    client = genai.Client(api_key=api_key)
-    prompt = PROMPT.format(language=language)
-    try:
-        resp = client.models.generate_content(
-            model=MODEL,
-            contents=prompt + "Title: " + title + "\n\n" + text,
-            config={"response_mime_type": "application/json"},
-        )
-    except Exception as err:
-        print("AI call fail hua:", err)
-        return None
+    for provider, call in (("Gemini", call_gemini), ("Groq", call_groq)):
+        raw = call(contents)
+        summary = parse_json(raw)
+        if summary:
+            print(f"  Summary {provider} se bani")
+            return summary
+        if raw:
+            print(f"  {provider} ka jawab JSON nahi tha:", raw[:200])
+        if provider == "Gemini":
+            print("  Gemini nahi chala, backup Groq try kar rahe hain...")
 
-    try:
-        return json.loads(resp.text)
-    except json.JSONDecodeError:
-        print("AI ne sahi JSON nahi diya. Jo aaya:")
-        print(resp.text[:500])
-        return None
+    print("Dono providers fail. Summary nahi bani.")
+    return None
 
 
 def main():
-    # Chalane ka tareeka: python summarize.py ta   (ta = Tamil)
     lang_code = sys.argv[1] if len(sys.argv) > 1 else "hi"
     row = get_release("2330875")
     if not row:
