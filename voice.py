@@ -39,7 +39,7 @@ def verified_summary(prid, lang):
 
     feedback = ""
     for attempt in (1, 2):
-        summary = summarize(title, text + feedback, lang)
+        summary = summarize(title, text[:2000] + feedback, lang)   # chhota input = kam tokens
         if not summary:
             log_event(prid, "summary", "fail", f"{lang}: Gemini aur Groq dono fail")
             return None

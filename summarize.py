@@ -31,6 +31,8 @@ person in a village. Use the native script of {language}.
 Rules:
 - Use ONLY facts from the press release below. Never add any number, date or name.
 - Write every number with digits 0-9, even inside {language} text.
+- A year alone (like 2047 or 2014) is a NUMBER, not a date. Put it in sankhya, never in tareekh_iso.
+- Only put a date in tareekh_iso if the press release gives a day and a month.
 - Each field: 1-2 short sentences.
 - If something is not in the text, write that it is not mentioned, in {language}.
 
@@ -62,6 +64,7 @@ def parse_json(raw):
     """Text se JSON nikalo, chahe aage-peeche kuch extra likha ho."""
     if not raw:
         return None
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -94,6 +97,8 @@ def call_gemini(contents, tries=3):
             return resp.text
         except Exception as err:
             busy = any(code in str(err) for code in RETRY_CODES)
+            if "quota" in str(err).lower():
+                busy = False      # daily quota khatam: retry bekaar, seedha backup pe jao
             if busy and attempt < tries:
                 print(f"  Gemini busy hai, {wait}s baad dobara try ({attempt}/{tries})")
                 time.sleep(wait)
@@ -111,7 +116,7 @@ def call_groq(contents, json_mode=True):
         return None
     body = {
         "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": contents}],
+        "messages": [{"role": "user", "content": contents + "\n\n/no_think"}],
         "temperature": 0.2,
         "max_tokens": 800,
     }
