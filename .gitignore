@@ -1,0 +1,12 @@
+# Database aur output
+*.db
+*.txt
+out*.txt
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Secrets kabhi upload nahi
+.env
+*.key
