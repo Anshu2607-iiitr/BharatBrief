@@ -13,6 +13,7 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 
 from voice import text_to_speech, verified_summary, voice_script
 from alerts import register_alerts
+from qa import answer_question, answer_text_telegram, last_sent_prid
 from audio_util import send_clip
 
 DB_FILE = "practice.db"
@@ -153,6 +154,7 @@ async def khabar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Original yahan padhein: {link}")
         return
 
+    context.user_data["last_prid"] = prid
     await update.message.reply_text(summary_card(title, link, summary),
                                      parse_mode=ParseMode.HTML,
                                      disable_web_page_preview=True)
@@ -168,7 +170,19 @@ async def khabar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Main abhi ye samajhta hoon: /khabar, /me, /start")
+    """Koi bhi likha hua message = aakhri khabar ke baare mein sawaal."""
+    question = (update.message.text or "").strip()
+    uid = update.effective_user.id
+    prid = context.user_data.get("last_prid") or last_sent_prid(uid)
+    if not prid:
+        await update.message.reply_text("Pehle /khabar se koi khabar lijiye, phir uske baare mein sawaal poochiye.")
+        return
+    row = get_user(uid)
+    lang = row[2] if row and row[2] else "hi"
+    await update.message.reply_text("Sawaal mila, khabar mein jawab dhoondh raha hoon...")
+    res = await asyncio.to_thread(answer_question, prid, question, lang)
+    await update.message.reply_text(answer_text_telegram(res), parse_mode=ParseMode.HTML,
+                                    disable_web_page_preview=True)
 
 
 def main():

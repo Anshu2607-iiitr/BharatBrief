@@ -13,6 +13,7 @@ from collector import setup_db as setup_releases
 from labels import AUDIENCE, LABELS, LANGS, ROLES
 import streamlit.components.v1 as components
 from hero3d import hero_html
+from qa import answer_question
 from trace_log import _conn, simulate_pib_down
 from voice import text_to_speech, voice_script
 
@@ -179,6 +180,23 @@ def story(row, lang, L, lead=False):
                     text_to_speech(voice_script(s, lang), lang, path)
                 st.rerun()
 
+    if isinstance(s, dict):
+        with st.form(f"q_{prid}_{lang}", border=False):
+            q = st.text_input(L["ask_ph"], key=f"qi_{prid}_{lang}", placeholder=L["ask_ph"],
+                              label_visibility="collapsed")
+            asked = st.form_submit_button(L["ask"])
+        if asked and q.strip():
+            with st.spinner(L["thinking"]):
+                st.session_state[f"qa_{prid}_{lang}"] = answer_question(prid, q.strip(), lang)
+        res = st.session_state.get(f"qa_{prid}_{lang}")
+        if res and res.get("ok"):
+            nums = ", ".join(str(n) for n, _ in res["paras"])
+            quotes = "".join(f'<div style="border-left:3px solid #0E6B50;padding:2px 10px;margin:4px 0;'
+                             f'font-size:14px;color:#4A453E">¶{n}: {e(t[:260])}…</div>' for n, t in res["paras"])
+            st.markdown(f'<div class="bb-snippet"><b>→</b> {e(res["answer"])}</div>'
+                        f'<div class="bb-time">{e(L["source"])} {nums}</div>{quotes}', unsafe_allow_html=True)
+        elif res:
+            st.info(L["notfound"] if res.get("reason") == "notfound" else L["busy"])
     st.markdown(f'<a class="bb-link" href="{e(link)}" target="_blank">{e(L["original"])} ↗</a>',
                 unsafe_allow_html=True)
 

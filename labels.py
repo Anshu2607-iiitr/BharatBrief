@@ -66,3 +66,22 @@ ROLES = {"सभी खबरें · All": "sabhi", "छात्र · Studen
          "दुकान / MSME": "msme", "महिला · Women": "mahila"}
 AUDIENCE = {"sabhi": "सबके लिए · Everyone", "student": "छात्र · Students", "kisan": "किसान · Farmers",
             "msme": "MSME · दुकान", "mahila": "महिला · Women"}
+
+
+# Lesson 18: sawaal-jawab ke shabd
+_QA = {
+    "hi": dict(ask_ph="इस खबर के बारे में कुछ पूछें…", ask="पूछें", source="स्रोत: मूल खबर का पैराग्राफ",
+               notfound="इस खबर में इसका जवाब नहीं है।", thinking="जवाब ढूंढ रहे हैं…"),
+    "en": dict(ask_ph="Ask something about this news…", ask="Ask", source="Source: original release, paragraph",
+               notfound="The answer is not in this release.", thinking="Looking for the answer…"),
+    "bn": dict(ask_ph="এই খবর সম্পর্কে কিছু জিজ্ঞাসা করুন…", ask="জিজ্ঞাসা করুন", source="সূত্র: মূল খবরের অনুচ্ছেদ",
+               notfound="এই খবরে এর উত্তর নেই।", thinking="উত্তর খোঁজা হচ্ছে…"),
+    "ta": dict(ask_ph="இந்தச் செய்தி பற்றி ஏதாவது கேளுங்கள்…", ask="கேளுங்கள்", source="ஆதாரம்: மூல செய்தியின் பத்தி",
+               notfound="இந்தச் செய்தியில் இதற்கான பதில் இல்லை.", thinking="பதிலைத் தேடுகிறோம்…"),
+    "te": dict(ask_ph="ఈ వార్త గురించి ఏదైనా అడగండి…", ask="అడగండి", source="ఆధారం: అసలు వార్తలోని పేరా",
+               notfound="ఈ వార్తలో దీనికి సమాధానం లేదు.", thinking="సమాధానం వెతుకుతున్నాం…"),
+    "mr": dict(ask_ph="या बातमीबद्दल काहीतरी विचारा…", ask="विचारा", source="स्रोत: मूळ बातमीचा परिच्छेद",
+               notfound="या बातमीत याचे उत्तर नाही.", thinking="उत्तर शोधत आहोत…"),
+}
+for _code, _words in _QA.items():
+    LABELS[_code].update(_words)
