@@ -1,5 +1,6 @@
 # Lesson 8: Bot - onboarding + /khabar (verified summary + voice note)
 
+import dbfix  # noqa: F401  (SQLite: WAL + 30s wait, sabse pehle)
 import asyncio
 import html
 import os

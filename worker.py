@@ -1,5 +1,6 @@
-﻿# Lesson 15: Worker - website se alag, har UPDATE_MINUTES pakka update
+# Lesson 15: Worker - website se alag, har UPDATE_MINUTES pakka update
 
+import dbfix  # noqa: F401  (SQLite: WAL + 30s wait, sabse pehle)
 import os
 import threading
 import time

@@ -1,5 +1,6 @@
 # Website - news website jaisa layout: masthead, ticker, categories, lead story, grid
 
+import dbfix  # noqa: F401  (SQLite: WAL + 30s wait, sabse pehle)
 import html
 import json
 import os
@@ -269,7 +270,11 @@ def front_page(lang, role, L):
     if not rows:
         st.info(L["none"])
         return
-    tr = translated_titles(rows, lang)                 # title bhi user ki bhasha mein
+    try:
+        tr = translated_titles(rows, lang)             # title bhi user ki bhasha mein
+    except Exception as err:                       # translation na mile to original title, page kabhi na toote
+        print('[home] title translate skip:', err)
+        tr = {}
     rows = [(r[0], tr.get(r[0], r[1])) + tuple(r[2:]) for r in rows]
 
     ticker = "".join(f"<span>● {html.escape(r[1])}</span>" for r in rows[:8])

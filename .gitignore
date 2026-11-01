@@ -17,3 +17,7 @@ __pycache__/
 
 # requirements.txt chahiye (deploy)
 !requirements.txt
+
+# SQLite WAL ki saathi files
+*.db-wal
+*.db-shm

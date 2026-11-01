@@ -1,5 +1,6 @@
-﻿# Lesson 12: Dashboard - aaj ki releases, agent trace, PIB down toggle
+# Lesson 12: Dashboard - aaj ki releases, agent trace, PIB down toggle
 
+import dbfix  # noqa: F401  (SQLite: WAL + 30s wait, sabse pehle)
 import sqlite3
 from datetime import date
 
