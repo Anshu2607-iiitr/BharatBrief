@@ -1,4 +1,4 @@
-﻿# Lesson 3 (+ updates): PIB feed + text + posted time, SQLite, duplicate rokna
+# Lesson 3 (+ updates): PIB feed + text + posted time, SQLite, duplicate rokna
 
 import re
 import sqlite3
@@ -43,7 +43,7 @@ def already_saved(conn, prid):
 
 def save(conn, prid, title, link, text, posted_at=None):
     conn.execute(
-        "INSERT INTO releases (prid, title, link, full_text, fetched_at, posted_at) "
+        "INSERT OR IGNORE INTO releases (prid, title, link, full_text, fetched_at, posted_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
         (prid, title, link, text, datetime.now().isoformat(timespec="seconds"), posted_at),
     )

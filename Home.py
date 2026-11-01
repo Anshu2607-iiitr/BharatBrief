@@ -22,7 +22,8 @@ from trace_log import _conn, simulate_pib_down
 from voice import text_to_speech, voice_script
 
 st.set_page_config(page_title="BharatBrief · सरकारी खबरें", page_icon="📰", layout="wide")
-start_updater_once()
+if not os.environ.get("BB_WORKER"):       # server pe worker hi update karta hai
+    start_updater_once()
 if not os.environ.get("BB_WORKER"):      # server pe queue worker.py chalata hai
     start_queue_once()
 
@@ -280,7 +281,7 @@ def front_page(lang, role, L):
     ticker = "".join(f"<span>● {html.escape(r[1])}</span>" for r in rows[:8])
     st.markdown(f'<div class="bb-ticker"><div class="label">{html.escape(L.get("latest", "Latest"))}</div>'
                 f'<div class="track">{ticker}</div></div>', unsafe_allow_html=True)
-    components.html(hero_html(rows[:8], lang, L, cached_only, dict(CATS.get(lang, CATS["en"]))), height=660)
+    st.iframe(hero_html(rows[:8], lang, L, cached_only, dict(CATS.get(lang, CATS["en"]))), height=660)
 
     with st.container(border=True):
         story(rows[0], lang, L, lead=True)

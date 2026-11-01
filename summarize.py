@@ -111,34 +111,70 @@ def call_gemini(contents, tries=3):
             return None
 
 
-# ---------- Provider 2: Groq (backup) ----------
-def call_groq(contents, json_mode=True):
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key or not GROQ_MODEL:
-        print("  GROQ_API_KEY ya GROQ_MODEL set nahi hai, backup nahi chal sakta")
-        return None
+# ---------- Provider 2: Groq (backup) - kai models, ek ka quota khatam to agla ----------
+GROQ_FALLBACKS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
+_groq_resting = {}          # model -> kab tak mat poochho (time.time())
+
+
+def _groq_models():
+    models = [m for m in [GROQ_MODEL] + GROQ_FALLBACKS if m]
+    return list(dict.fromkeys(models))           # duplicate hatao, order wahi
+
+
+def _wait_seconds(text):
+    """'try again in 8m44.01s' -> 524 second. Na mile to 1 ghanta."""
+    m = re.search(r"try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", text)
+    if not m or not any(m.groups()):
+        return 3600
+    h, mi, sec = (float(x) if x else 0 for x in m.groups())
+    return h * 3600 + mi * 60 + sec
+
+
+def _groq_once(model, contents, api_key, json_mode):
     body = {
-        "model": GROQ_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": contents + "\n\n/no_think"}],
         "temperature": 0.2,
         "max_tokens": 800,
     }
+    if "gpt-oss" in model:                       # reasoning model: kam sochna, zyada jagah jawab ke liye
+        body["reasoning_effort"] = "low"
+        body["max_tokens"] = 2000
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    try:
-        resp = requests.post(GROQ_URL, json=body, timeout=60,
-                             headers={"Authorization": f"Bearer {api_key}"})
-    except requests.RequestException as err:
-        print("  Groq network problem:", err)
-        return None
+    return requests.post(GROQ_URL, json=body, timeout=60, headers={"Authorization": f"Bearer {api_key}"})
 
-    if resp.status_code == 400 and "json_validate_failed" in resp.text and json_mode:
-        print("  Groq JSON mode fail, bina JSON mode ke dobara try...")
-        return call_groq(contents, json_mode=False)
-    if resp.status_code != 200:
-        print("  Groq error:", resp.status_code, resp.text[:300])
+
+def call_groq(contents, json_mode=True):
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        print("  GROQ_API_KEY set nahi hai, backup nahi chal sakta")
         return None
-    return resp.json()["choices"][0]["message"]["content"]
+    for model in _groq_models():
+        if _groq_resting.get(model, 0) > time.time():
+            continue                             # is model ka quota abhi khatam, agla
+        try:
+            resp = _groq_once(model, contents, api_key, json_mode)
+            if resp.status_code == 400 and "json_validate_failed" in resp.text and json_mode:
+                resp = _groq_once(model, contents, api_key, False)
+        except requests.RequestException as err:
+            print(f"  Groq ({model}) network problem:", err)
+            continue
+        if resp.status_code == 200:
+            global LAST_PROVIDER_MODEL
+            LAST_PROVIDER_MODEL = model
+            return resp.json()["choices"][0]["message"]["content"]
+        if resp.status_code == 429:
+            wait = _wait_seconds(resp.text)
+            per_day = "per day" in resp.text or "TPD" in resp.text or "RPD" in resp.text
+            _groq_resting[model] = time.time() + (wait if per_day else min(wait, 60))
+            print(f"  Groq {model}: limit ({'aaj ka' if per_day else 'is minute ka'}), {int(wait)}s aaraam, agla model")
+            continue
+        print(f"  Groq {model} error:", resp.status_code, resp.text[:200])
+    return None
+
+
+LAST_PROVIDER_MODEL = ""
 
 
 def summarize(title, text, lang_code):
