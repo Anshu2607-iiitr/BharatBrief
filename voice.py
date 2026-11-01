@@ -1,6 +1,9 @@
 # Lesson 7: Verified summary ko Sarvam TTS se voice note banana
 
 import base64
+import time
+import subprocess
+import shutil
 import os
 import sys
 
@@ -86,15 +89,22 @@ def voice_script(summary, lang):
     return " ".join(p for p in parts if p)
 
 
-def text_to_speech(text, lang, out_path, gender="f"):
-    key = os.environ.get("SARVAM_API_KEY")
-    if not key:
-        print("SARVAM_API_KEY set nahi hai.")
-        return False
-    if lang not in LANG_CODES:
-        print("Is bhasha ki awaaz abhi nahi:", lang)
-        return False
+# Backup awaaz: Microsoft Edge "read aloud" (free, mahila + purush). Sarvam ke credits khatam ya band ho to ye.
+EDGE_VOICES = {
+    "hi": ("hi-IN-SwaraNeural", "hi-IN-MadhurNeural"), "en": ("en-IN-NeerjaNeural", "en-IN-PrabhatNeural"),
+    "bn": ("bn-IN-TanishaaNeural", "bn-IN-BashkarNeural"), "ta": ("ta-IN-PallaviNeural", "ta-IN-ValluvarNeural"),
+    "te": ("te-IN-ShrutiNeural", "te-IN-MohanNeural"), "mr": ("mr-IN-AarohiNeural", "mr-IN-ManoharNeural"),
+    "gu": ("gu-IN-DhwaniNeural", "gu-IN-NiranjanNeural"), "kn": ("kn-IN-SapnaNeural", "kn-IN-GaganNeural"),
+    "ml": ("ml-IN-SobhanaNeural", "ml-IN-MidhunNeural"), "ur": ("ur-IN-GulNeural", "ur-IN-SalmanNeural"),
+}
+_sarvam_off_until = 0           # credits khatam / limit: itni der Sarvam ko mat poochho
 
+
+def _sarvam(text, lang, out_path, gender):
+    global _sarvam_off_until
+    key = os.environ.get("SARVAM_API_KEY")
+    if not key or lang not in LANG_CODES or time.time() < _sarvam_off_until:
+        return False
     body = {
         "text": text[:1500],                     # bahut lamba text na bhejein
         "target_language_code": LANG_CODES[lang],
@@ -102,25 +112,55 @@ def text_to_speech(text, lang, out_path, gender="f"):
         "speaker": VOICES.get(gender, VOICES["f"]),
     }
     try:
-        resp = requests.post(SARVAM_URL, json=body,
-                             headers={"api-subscription-key": key}, timeout=60)
+        resp = requests.post(SARVAM_URL, json=body, headers={"api-subscription-key": key}, timeout=60)
     except requests.RequestException as err:
-        print("Network problem:", err)
+        print("  Sarvam network problem:", err)
         return False
-
     if resp.status_code != 200:
-        print("Sarvam error:", resp.status_code)
-        print(resp.text[:400])                   # error message se pata chalega kya badalna hai
+        print("  Sarvam error:", resp.status_code, resp.text[:200])
+        if resp.status_code in (402, 429) or "credit" in resp.text.lower():
+            _sarvam_off_until = time.time() + 3600
+            print("  Sarvam 1 ghante ke liye band, backup awaaz use karenge")
         return False
-
     audios = resp.json().get("audios") or []
     if not audios:
-        print("Audio nahi aaya. Jawab:", resp.text[:400])
         return False
-
     with open(out_path, "wb") as f:
         f.write(base64.b64decode(audios[0]))     # Sarvam audio ko base64 text mein bhejta hai
     return True
+
+
+def _edge(text, lang, out_path, gender):
+    pair = EDGE_VOICES.get(lang)
+    if not pair:
+        return False
+    mp3 = out_path + ".mp3"
+    try:
+        import asyncio
+        import edge_tts
+        asyncio.run(edge_tts.Communicate(text[:3000], pair[1 if gender == "m" else 0]).save(mp3))
+        if shutil.which("ffmpeg"):                # asli WAV banao (baaki code WAV maanta hai)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3, out_path], timeout=60, check=True)
+            os.remove(mp3)
+        else:                                     # ffmpeg nahi: MP3 hi rakh do (Telegram content se pehchaan leta hai)
+            os.replace(mp3, out_path)
+        ok = os.path.exists(out_path) and os.path.getsize(out_path) > 1000
+        if ok:
+            print("  Awaaz backup (Edge) se bani")
+        return ok
+    except Exception as err:
+        print("  Backup awaaz fail:", err)
+        if os.path.exists(mp3):
+            os.remove(mp3)
+        return False
+
+
+def text_to_speech(text, lang, out_path, gender="f"):
+    """Pehle Sarvam; na chale to backup. Dono fail = False (tab sirf text jaayega)."""
+    if lang not in LANG_CODES and lang not in EDGE_VOICES:
+        print("Is bhasha ki awaaz abhi nahi:", lang)
+        return False
+    return _sarvam(text, lang, out_path, gender) or _edge(text, lang, out_path, gender)
 
 
 def main():

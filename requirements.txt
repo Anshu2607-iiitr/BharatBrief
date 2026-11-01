@@ -6,3 +6,4 @@ python-telegram-bot[job-queue]>=22.8
 python-dotenv
 streamlit>=1.66
 pandas
+edge-tts
