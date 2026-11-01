@@ -13,8 +13,10 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandl
 
 from voice import text_to_speech, verified_summary, voice_script
 from alerts import register_alerts
+from reminders import add_reminder, parse_deeplink, register_reminders, reminder_keyboard
 from qa import answer_question, answer_text_telegram, last_sent_prid
 from audio_util import send_clip
+from digest import register_digest
 
 DB_FILE = "practice.db"
 
@@ -26,6 +28,8 @@ LANGS = [("हिन्दी", "hi"), ("English", "en"), ("বাংলা", "b
          ("தமிழ்", "ta"), ("తెలుగు", "te"), ("मराठी", "mr")]
 
 ALLOWED_FIELDS = {"role", "state", "lang"}
+from languages import ALL as _ALL_LANGS
+LANGS = [(v["native"], c) for c, v in _ALL_LANGS.items()]
 
 
 # ---------- Database ----------
@@ -96,6 +100,12 @@ def summary_card(title, link, s):
 
 # ---------- Handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rem = parse_deeplink(context.args)          # website ka 'Telegram pe yaad dilao' link
+    if rem:
+        when = add_reminder(update.effective_user.id, *rem)
+        await update.message.reply_text(f"⏰ Theek hai! {when:%d %b} ko is khabar ki tareekh yaad dilaunga. "
+                                        "Apne reminders dekhne ke liye /yaad likhein.")
+        return
     await update.message.reply_text(
         "Namaste! Main aapko nayi sarkari khabrein aasaan bhasha mein, awaaz mein "
         "bhejunga, original source ke link ke saath.\n\nAap kaun hain?",
@@ -108,6 +118,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prefix, value = q.data.split(":", 1)
     uid = q.from_user.id
 
+    if prefix == "rem":
+        rem_prid, due = value.split(":", 1)
+        when = add_reminder(uid, rem_prid, due)
+        await q.message.reply_text(f"⏰ Theek hai! {when:%d %b} ko yaad dilaunga. /yaad se apne reminders dekhein.")
+        return
     if prefix == "role":
         save_field(uid, "role", value)
         await q.edit_message_text(f"Aap: {label_of(ROLES, value)} ✓")
@@ -157,7 +172,8 @@ async def khabar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_prid"] = prid
     await update.message.reply_text(summary_card(title, link, summary),
                                      parse_mode=ParseMode.HTML,
-                                     disable_web_page_preview=True)
+                                     disable_web_page_preview=True,
+                                     reply_markup=reminder_keyboard(prid, summary))
 
     audio_path = f"khabar_{prid}_{lang}.wav"
     if not os.path.exists(audio_path):
@@ -197,6 +213,8 @@ def main():
     app.add_handler(CommandHandler("khabar", khabar))
     app.add_handler(CallbackQueryHandler(on_button))
     register_alerts(app, summary_card)
+    register_reminders(app)
+    register_digest(app)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
     print("Bot chal raha hai... band karne ke liye Ctrl+C (na chale to: taskkill /IM python.exe /F)")
     app.run_polling()
