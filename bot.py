@@ -1,48 +1,49 @@
-# Lesson 8: Bot - onboarding + /khabar (verified summary + voice note)
+# Lesson 23: Telegram-first bot
+# Badi buttons (commands yaad nahi rakhne), user ki bhasha, role ke hisaab se "agli khabar",
+# WhatsApp share, aur awaaz se sawaal -> jawab awaaz mein.
 
 import dbfix  # noqa: F401  (SQLite: WAL + 30s wait, sabse pehle)
 import asyncio
 import html
 import os
 import sqlite3
-from datetime import datetime
+import tempfile
+import time
+import urllib.parse
+from datetime import date, datetime
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
 
-from voice import text_to_speech, verified_summary, voice_script
-from alerts import register_alerts
-from reminders import add_reminder, parse_deeplink, register_reminders, reminder_keyboard
-from qa import answer_question, answer_text_telegram, last_sent_prid
+from alerts import cached_summary, mark_sent, register_alerts, setup_alert_tables
 from audio_util import send_clip
-from digest import register_digest
+from bot_text import t
+from collector import setup_db as setup_releases
+from digest import IST, register_digest, send_digest, top_releases
+from digest import _setup as setup_digest_tables
+from labels import LABELS, ROLES as ROLE_MAP
+from languages import ALL as ALL_LANGS
+from qa import answer_question, last_sent_prid
+from reminders import add_reminder, future_dates, parse_deeplink, register_reminders
+from voice import text_to_speech, voice_script
+from voice_input import transcribe
+from translate import translated_titles
 
 DB_FILE = "practice.db"
-
-ROLES = [("Student", "student"), ("Kisan", "kisan"), ("MSME / dukaan", "msme"),
-         ("Mahila", "mahila"), ("Sabhi khabrein", "sabhi")]
-STATES = [("Jharkhand", "Jharkhand"), ("Bihar", "Bihar"), ("Uttar Pradesh", "Uttar Pradesh"),
-          ("West Bengal", "West Bengal"), ("Tamil Nadu", "Tamil Nadu"), ("Doosra rajya", "Other")]
-LANGS = [("हिन्दी", "hi"), ("English", "en"), ("বাংলা", "bn"),
-         ("தமிழ்", "ta"), ("తెలుగు", "te"), ("मराठी", "mr")]
-
+ROLES = list(ROLE_MAP.items())                       # [("छात्र · Student", "student"), ...]
+LANGS = [(v["native"], c) for c, v in ALL_LANGS.items()]
 ALLOWED_FIELDS = {"role", "state", "lang"}
-from languages import ALL as _ALL_LANGS
-LANGS = [(v["native"], c) for c, v in _ALL_LANGS.items()]
 
 
 # ---------- Database ----------
 def setup_db():
     conn = sqlite3.connect(DB_FILE)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            telegram_id INTEGER PRIMARY KEY,
-            role TEXT, state TEXT, lang TEXT, joined_at TEXT
-        )
-    """)
+    conn.execute("""CREATE TABLE IF NOT EXISTS users (
+        telegram_id INTEGER PRIMARY KEY, role TEXT, state TEXT, lang TEXT, joined_at TEXT)""")
     conn.commit()
+    setup_digest_tables(conn)                        # users.digest column
     conn.close()
 
 
@@ -58,59 +59,245 @@ def save_field(user_id, field, value):
 
 
 def get_user(user_id):
+    """(role, lang, digest) ya None."""
     conn = sqlite3.connect(DB_FILE)
-    row = conn.execute("SELECT role, state, lang FROM users WHERE telegram_id = ?",
+    row = conn.execute("SELECT role, lang, COALESCE(digest, 1) FROM users WHERE telegram_id = ?",
                        (user_id,)).fetchone()
     conn.close()
     return row
 
 
-def latest_release():
+def lang_of(user_id):
+    row = get_user(user_id)
+    return row[1] if row and row[1] else "hi"
+
+
+def toggle_digest(user_id):
     conn = sqlite3.connect(DB_FILE)
-    row = conn.execute("SELECT prid, title, link FROM releases "
-                       "WHERE full_text != '' ORDER BY fetched_at DESC, prid DESC LIMIT 1").fetchone()
+    conn.execute("UPDATE users SET digest = 1 - COALESCE(digest, 1) WHERE telegram_id = ?", (user_id,))
+    conn.commit()
     conn.close()
-    return row
 
 
-# ---------- Helpers ----------
-def keyboard(prefix, options, cols=2):
-    buttons = [InlineKeyboardButton(label, callback_data=f"{prefix}:{value}")
-               for label, value in options]
+# ---------- Keyboards ----------
+def main_menu(lang):
+    """Neeche hamesha dikhne wale bade buttons: commands yaad rakhne ki zaroorat nahi."""
+    return ReplyKeyboardMarkup([[t(lang, "btn_news"), t(lang, "btn_digest")],
+                                [t(lang, "btn_ask"), t(lang, "btn_settings")]],
+                               resize_keyboard=True, is_persistent=True)
+
+
+def grid(prefix, options, cols=2):
+    buttons = [InlineKeyboardButton(label, callback_data=f"{prefix}:{value}") for label, value in options]
     return InlineKeyboardMarkup([buttons[i:i + cols] for i in range(0, len(buttons), cols)])
 
 
 def label_of(options, value):
-    for label, v in options:
-        if v == value:
-            return label
-    return value
+    return next((label for label, v in options if v == value), value or "-")
 
 
-def summary_card(title, link, s):
+def news_keyboard(prid, title, s, lang, bot_username):
+    share_text = (f"📰 {title}\n\n{s.get('kya_hua', '')}\n\n{t(lang, 'share_from')} "
+                  f"https://t.me/{bot_username}")[:900]
+    rows = [[InlineKeyboardButton(t(lang, "next"), callback_data="next:1"),
+             InlineKeyboardButton(t(lang, "share"), url="https://wa.me/?text=" + urllib.parse.quote(share_text))]]
+    for d in future_dates(s):
+        rows.append([InlineKeyboardButton(t(lang, "remind", d=f"{date.fromisoformat(d):%d %b}"),
+                                          callback_data=f"rem:{prid}:{d}")])
+    return InlineKeyboardMarkup(rows)
+
+
+# ---------- Khabar ka card (user ki bhasha mein labels) ----------
+SCRIPTS = [("bn", 0x0980, 0x09FF), ("ta", 0x0B80, 0x0BFF), ("te", 0x0C00, 0x0C7F), ("hi", 0x0900, 0x097F)]
+
+
+def guess_lang(text):
+    """Alerts mein bhasha pata nahi hoti: summary ki lipi (script) se andaza."""
+    for ch in text or "":
+        for code, lo, hi_ in SCRIPTS:
+            if lo <= ord(ch) <= hi_:
+                return code
+    return "en" if any(c.isascii() and c.isalpha() for c in (text or "")) else "hi"
+
+
+def card(title, link, s, lang=None):
+    lang = lang or guess_lang(s.get("kya_hua", ""))
+    L = LABELS.get(lang, LABELS["en"])
     e = html.escape
-    return (
-        f"<b>{e(title)}</b>\n\n"
-        f"<b>Kya hua:</b> {e(s.get('kya_hua', ''))}\n\n"
-        f"<b>Aap pe asar:</b> {e(s.get('aap_pe_asar', ''))}\n\n"
-        f"<b>Aapko kya karna hai:</b> {e(s.get('kya_karna_hai', ''))}\n\n"
-        f"✓ Har number aur tareekh original release se check ki gayi\n"
-        f"Source: <a href=\"{e(link)}\">PIB press release</a>"
-    )
+    return (f"📰 <b>{e(title)}</b>\n\n"
+            f"<b>{e(L['kya'])}:</b> {e(str(s.get('kya_hua', '')))}\n\n"
+            f"<b>{e(L['asar'])}:</b> {e(str(s.get('aap_pe_asar', '')))}\n\n"
+            f"<b>{e(L['karna'])}:</b> {e(str(s.get('kya_karna_hai', '')))}\n\n"
+            f"<i>{e(L['checked'])}</i>\n"
+            f'🔗 <a href="{e(link)}">{e(L["original"])}</a>')
 
 
-# ---------- Handlers ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rem = parse_deeplink(context.args)          # website ka 'Telegram pe yaad dilao' link
-    if rem:
-        when = add_reminder(update.effective_user.id, *rem)
-        await update.message.reply_text(f"⏰ Theek hai! {when:%d %b} ko is khabar ki tareekh yaad dilaunga. "
-                                        "Apne reminders dekhne ke liye /yaad likhein.")
+# ---------- Agli khabar chunna ----------
+def pick_next(role, lang, seen, tries=3):
+    """Role wali khabrein pehle, naye pehle. Jinki summary cache mein hai unhe pehle (turant jawab).
+    Return (prid, title, link, summary) ya None, aur jo khabrein verify nahi hui unki list."""
+    conn = setup_releases()
+    setup_alert_tables(conn)
+    skipped = []
+    try:
+        rows = top_releases(conn, role if role != "sabhi" else None, hours=72)
+        if not rows:                                  # 3 din mein kuch nahi: jo bhi sabse naya hai
+            rows = conn.execute("""SELECT prid, title, link, '' FROM releases WHERE full_text != ''
+                ORDER BY COALESCE(NULLIF(posted_at, 'unknown'), fetched_at) DESC LIMIT 30""").fetchall()
+        rows = [r for r in rows if r[0] not in seen]
+        cached = {p for (p,) in conn.execute("SELECT prid FROM summaries WHERE lang = ?", (lang,))}
+        order = sorted(rows[:5], key=lambda r: r[0] not in cached) + rows[5:]
+        for prid, title, link, _ in order[:tries]:
+            s = cached_summary(conn, prid, lang)      # cache, warna AI + verify
+            if s:
+                try:                                  # title bhi user ki bhasha mein (cache, warna 1 AI call)
+                    title = translated_titles([(prid, title)], lang).get(prid, title)
+                except Exception as err:
+                    print("  title translate skip:", err)
+                return (prid, title, link, s), skipped
+            skipped.append(prid)
+        return None, skipped
+    finally:
+        conn.close()
+
+
+# ---------- Khabar bhejna ----------
+async def send_news(context, chat_id, uid):
+    row = get_user(uid)
+    role, lang = ((row[0] or "sabhi"), (row[1] or "hi")) if row else ("sabhi", "hi")
+    seen = context.user_data.setdefault("seen", [])
+
+    await context.bot.send_chat_action(chat_id, ChatAction.TYPING)
+    wait = await context.bot.send_message(chat_id, t(lang, "preparing"))
+    found, skipped = await asyncio.to_thread(pick_next, role, lang, set(seen))
+    seen.extend(skipped)
+    try:
+        await wait.delete()
+    except Exception:
+        pass
+
+    if not found:
+        context.user_data["seen"] = []                # agli baar shuru se
+        await context.bot.send_message(chat_id, t(lang, "no_more"), reply_markup=main_menu(lang))
         return
-    await update.message.reply_text(
-        "Namaste! Main aapko nayi sarkari khabrein aasaan bhasha mein, awaaz mein "
-        "bhejunga, original source ke link ke saath.\n\nAap kaun hain?",
-        reply_markup=keyboard("role", ROLES))
+    prid, title, link, s = found
+    seen.append(prid)
+    context.user_data["last_prid"] = prid
+
+    await context.bot.send_message(chat_id, card(title, link, s, lang), parse_mode=ParseMode.HTML,
+                                   disable_web_page_preview=True,
+                                   reply_markup=news_keyboard(prid, title, s, lang, context.bot.username))
+    await asyncio.to_thread(mark_sent, uid, prid)   # alert mein dobara na aaye; sawaal isi pe
+
+    if ALL_LANGS.get(lang, {}).get("voice"):
+        path = f"khabar_{prid}_{lang}.wav"
+        await context.bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
+        ok = os.path.exists(path) or await asyncio.to_thread(text_to_speech, voice_script(s, lang), lang, path)
+        if ok:
+            await send_clip(context.bot, chat_id, path, title[:60])
+
+
+# ---------- Sawaal -> jawab (likh ke ya bol ke) ----------
+async def answer(update, context, question, lang, by_voice=False):
+    uid = update.effective_user.id
+    prid = context.user_data.get("last_prid") or await asyncio.to_thread(last_sent_prid, uid)
+    if not prid:
+        await update.message.reply_text(t(lang, "need_news"), reply_markup=main_menu(lang))
+        return
+    await update.message.reply_text(t(lang, "thinking"))
+    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    res = await asyncio.to_thread(answer_question, prid, question, lang)
+
+    e = html.escape
+    if res.get("ok"):
+        src = "\n".join(f"<i>¶{n}: {e(p[:200])}…</i>" for n, p in res["paras"])
+        await update.message.reply_text(f"💬 {e(res['answer'])}\n\n{e(t(lang, 'source'))}\n{src}",
+                                        parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        if by_voice and ALL_LANGS.get(lang, {}).get("voice"):      # bol ke poochha -> jawab bhi awaaz mein
+            path = os.path.join(tempfile.gettempdir(), f"ans_{uid}_{int(time.time())}.wav")
+            if await asyncio.to_thread(text_to_speech, res["answer"], lang, path):
+                await send_clip(context.bot, update.effective_chat.id, path, "💬")
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+    else:
+        await update.message.reply_text(t(lang, "qa_" + res.get("reason", "busy")))
+
+
+async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    lang = lang_of(uid)
+    media = update.message.voice or update.message.audio
+    if media.duration and media.duration > 60:
+        await update.message.reply_text(t(lang, "too_long"))
+        return
+    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.TYPING)
+    path = os.path.join(tempfile.gettempdir(), f"q_{uid}_{media.file_unique_id}.ogg")
+    await (await media.get_file()).download_to_drive(path)
+    text = await asyncio.to_thread(transcribe, path, lang)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    if not text:
+        await update.message.reply_text(t(lang, "not_heard"))
+        return
+    await update.message.reply_text(f"{t(lang, 'heard')} <i>{html.escape(text)}</i>", parse_mode=ParseMode.HTML)
+    if len(text) < 25 and any(w in text.lower() for w in ("खबर", "ख़बर", "समाचार", "khabar", "news")):
+        await send_news(context, update.effective_chat.id, uid)      # "aaj ki khabar sunao"
+        return
+    await answer(update, context, text, lang, by_voice=True)
+
+
+# ---------- Onboarding: pehle bhasha (taaki agla sawaal apni bhasha mein ho), phir role. Bas 2 tap. ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    rem = parse_deeplink(context.args)                # website ka "Telegram pe yaad dilao" link
+    if rem:
+        when = add_reminder(uid, *rem)
+        lang = lang_of(uid)
+        await update.message.reply_text(t(lang, "remind_ok", when=f"{when:%d %b}"), reply_markup=main_menu(lang))
+        return
+    await update.message.reply_text(t("hi", "choose_lang"), reply_markup=grid("lang", LANGS, cols=3))
+
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    row = get_user(uid)
+    if not row or not row[1]:
+        await start(update, context)
+        return
+    role, lang, digest_on = row
+    text = (f"<b>{t(lang, 'settings')}</b>\n\n"
+            f"🌐 {t(lang, 'lang')}: {html.escape(label_of(LANGS, lang))}\n"
+            f"👤 {t(lang, 'role')}: {html.escape(label_of(ROLES, role))}\n"
+            f"🌅 {t(lang, 'digest')}: {t(lang, 'on' if digest_on else 'off')}")
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "set_lang"), callback_data="set:lang"),
+                                InlineKeyboardButton(t(lang, "set_role"), callback_data="set:role")],
+                               [InlineKeyboardButton(t(lang, "set_digest"), callback_data="set:digest")]])
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def digest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    row = get_user(uid)
+    if not row or not row[1]:
+        await start(update, context)
+        return
+    role, lang, _ = row
+    await update.message.reply_text(t(lang, "preparing"))
+    day = datetime.now(IST).strftime("%Y-%m-%d")
+    if not await send_digest(context.bot, [(uid, lang, role)], day, force=True):
+        await update.message.reply_text(t(lang, "no_more"), reply_markup=main_menu(lang))
+
+
+async def news_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not get_user(uid):
+        await start(update, context)
+        return
+    await send_news(context, update.effective_chat.id, uid)
 
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -118,88 +305,79 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     prefix, value = q.data.split(":", 1)
     uid = q.from_user.id
+    lang = lang_of(uid)
 
-    if prefix == "rem":
-        rem_prid, due = value.split(":", 1)
-        when = add_reminder(uid, rem_prid, due)
-        await q.message.reply_text(f"⏰ Theek hai! {when:%d %b} ko yaad dilaunga. /yaad se apne reminders dekhein.")
-        return
-    if prefix == "role":
-        save_field(uid, "role", value)
-        await q.edit_message_text(f"Aap: {label_of(ROLES, value)} ✓")
-        await q.message.reply_text("Aap kis rajya se hain?", reply_markup=keyboard("state", STATES))
-    elif prefix == "state":
-        save_field(uid, "state", value)
-        await q.edit_message_text(f"Rajya: {label_of(STATES, value)} ✓")
-        await q.message.reply_text("Khabar kis bhasha mein chahiye?",
-                                   reply_markup=keyboard("lang", LANGS, cols=3))
+    if prefix == "rem":                               # "rem:<prid>:<yyyy-mm-dd>"
+        prid, due = value.split(":", 1)
+        when = add_reminder(uid, prid, due)
+        await q.message.reply_text(t(lang, "remind_ok", when=f"{when:%d %b}"))
+    elif prefix == "next":
+        await send_news(context, q.message.chat_id, uid)
     elif prefix == "lang":
+        had_role = (get_user(uid) or (None,))[0]
         save_field(uid, "lang", value)
-        await q.edit_message_text(f"Bhasha: {label_of(LANGS, value)} ✓")
-        await q.message.reply_text("Ho gaya! Abhi ki khabar sunne ke liye /khabar likhein.\n"
-                                   "Settings dekhne ke liye /me, badalne ke liye /start.")
+        await q.edit_message_text(f"🌐 {label_of(LANGS, value)} ✓")
+        if had_role:                                  # sirf bhasha badli
+            await q.message.reply_text(t(value, "saved"), reply_markup=main_menu(value))
+        else:
+            await q.message.reply_text(t(value, "role_q"), reply_markup=grid("role", ROLES))
+    elif prefix == "role":
+        had_role = (get_user(uid) or (None,))[0]
+        save_field(uid, "role", value)
+        await q.edit_message_text(f"👤 {label_of(ROLES, value)} ✓")
+        if had_role:
+            await q.message.reply_text(t(lang, "saved"), reply_markup=main_menu(lang))
+        else:                                         # naya user: menu + turant pehli khabar
+            await q.message.reply_text(t(lang, "done"), reply_markup=main_menu(lang))
+            await send_news(context, q.message.chat_id, uid)
+    elif prefix == "set":
+        if value == "lang":
+            await q.message.reply_text(t(lang, "choose_lang"), reply_markup=grid("lang", LANGS, cols=3))
+        elif value == "role":
+            await q.message.reply_text(t(lang, "role_q"), reply_markup=grid("role", ROLES))
+        elif value == "digest":
+            toggle_digest(uid)
+            await settings(update, context)
 
 
-async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    row = get_user(update.effective_user.id)
-    if not row:
-        await update.message.reply_text("Aapka profile nahi mila. /start se shuru karein.")
-        return
-    role, state, lang = row
-    await update.message.reply_text(
-        f"Aap: {label_of(ROLES, role)}\nRajya: {label_of(STATES, state)}\nBhasha: {label_of(LANGS, lang)}")
-
-
-async def khabar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    row = get_user(update.effective_user.id)
-    lang = (row[2] if row and row[2] else "hi")
-
-    release = latest_release()
-    if not release:
-        await update.message.reply_text("Abhi koi khabar nahi hai. Thodi der baad try karein.")
-        return
-    prid, title, link = release
-
-    await update.message.reply_text("Khabar taiyaar ho rahi hai, 30-60 second lagenge...")
-
-    # AI calls blocking hain, isliye alag thread mein, taaki bot baaki users ke liye na ruke
-    summary = await asyncio.to_thread(verified_summary, prid, lang)
-    if not summary:
-        await update.message.reply_text(
-            "Maaf kijiye, is khabar ki summary verify nahi ho paayi, isliye nahi bhej rahe. "
-            f"Original yahan padhein: {link}")
-        return
-
-    context.user_data["last_prid"] = prid
-    await update.message.reply_text(summary_card(title, link, summary),
-                                     parse_mode=ParseMode.HTML,
-                                     disable_web_page_preview=True,
-                                     reply_markup=reminder_keyboard(prid, summary))
-
-    audio_path = f"khabar_{prid}_{lang}.wav"
-    if not os.path.exists(audio_path):
-        ok = await asyncio.to_thread(text_to_speech, voice_script(summary, lang), lang, audio_path)
-        if not ok:
-            await update.message.reply_text("Awaaz abhi nahi ban paayi, upar likhi khabar padhein.")
-            return
-
-    await send_clip(context.bot, update.effective_chat.id, audio_path, "Khabar (AI awaaz)")
-
-
-async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Koi bhi likha hua message = aakhri khabar ke baare mein sawaal."""
-    question = (update.message.text or "").strip()
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menu ke buttons emoji se pehchaano (har bhasha mein same); baaki sab = sawaal."""
+    text = (update.message.text or "").strip()
     uid = update.effective_user.id
-    prid = context.user_data.get("last_prid") or last_sent_prid(uid)
-    if not prid:
-        await update.message.reply_text("Pehle /khabar se koi khabar lijiye, phir uske baare mein sawaal poochiye.")
-        return
-    row = get_user(uid)
-    lang = row[2] if row and row[2] else "hi"
-    await update.message.reply_text("Sawaal mila, khabar mein jawab dhoondh raha hoon...")
-    res = await asyncio.to_thread(answer_question, prid, question, lang)
-    await update.message.reply_text(answer_text_telegram(res), parse_mode=ParseMode.HTML,
-                                    disable_web_page_preview=True)
+    lang = lang_of(uid)
+    if text.startswith("📰"):
+        await news_cmd(update, context)
+    elif text.startswith("🌅"):
+        await digest_now(update, context)
+    elif text.startswith("🎙"):
+        await update.message.reply_text(t(lang, "ask_hint"))
+    elif text.startswith("⚙"):
+        await settings(update, context)
+    else:
+        await answer(update, context, text, lang)
+
+
+# ---------- Bot ka chehra: menu commands + description (Telegram app mein dikhta hai) ----------
+async def post_init(app):
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("khabar", "📰 आज की खबर · Today's news"),
+            BotCommand("subah", "🌅 3 बड़ी खबरें · Top 3 stories"),
+            BotCommand("settings", "⚙️ भाषा, सेटिंग · Language, settings"),
+            BotCommand("yaad", "⏰ मेरे रिमाइंडर · My reminders"),
+            BotCommand("start", "🔄 शुरू से · Start over"),
+        ])
+        await app.bot.set_my_short_description(
+            "सरकारी खबरें आपकी भाषा में, आवाज़ में, हर तथ्य जाँचा हुआ। "
+            "Govt news in your language, by voice, fact-checked.")
+        await app.bot.set_my_description(
+            "📰 PIB की सरकारी खबरें आसान भाषा में, 11 भाषाओं में आवाज़ के साथ।\n"
+            "✓ हर नंबर और तारीख मूल खबर से जाँची जाती है।\n"
+            "🎙️ बोलकर सवाल पूछिए, जवाब आवाज़ में।\n"
+            "🌅 हर सुबह 8 बजे 3 बड़ी खबरें।\n\nStart दबाइए 👇")
+        print("Bot menu + description set")
+    except Exception as err:
+        print("Bot menu set nahi hua:", err)
 
 
 def main():
@@ -208,16 +386,17 @@ def main():
         print("TELEGRAM_BOT_TOKEN set nahi hai.")
         return
     setup_db()
-    app = ApplicationBuilder().token(token).build()
+    app = ApplicationBuilder().token(token).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("me", me))
-    app.add_handler(CommandHandler("khabar", khabar))
+    app.add_handler(CommandHandler("khabar", news_cmd))
+    app.add_handler(CommandHandler(["settings", "me", "bhasha"], settings))
     app.add_handler(CallbackQueryHandler(on_button))
-    register_alerts(app, summary_card)
+    register_alerts(app, card)                        # alerts mein bhi naya card
     register_reminders(app)
-    register_digest(app)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown))
-    print("Bot chal raha hai... band karne ke liye Ctrl+C (na chale to: taskkill /IM python.exe /F)")
+    register_digest(app)                              # /subah
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    print("Bot chal raha hai... band karne ke liye Ctrl+C")
     app.run_polling()
 
 

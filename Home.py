@@ -252,6 +252,23 @@ if lang in RTL:
 st.markdown(f'<div class="bb-mast"><div class="name">BharatBrief</div>'
             f'<div class="tag">{html.escape(L["tagline"])}</div></div>', unsafe_allow_html=True)
 
+# ---- Asli product Telegram bot hai: website se seedha wahan bhejo ----
+_bot = bot_username()
+if _bot:
+    from bot_text import t as _bt
+    st.markdown(f"""
+<a href="https://t.me/{html.escape(_bot)}?start=web" target="_blank" style="text-decoration:none">
+<div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;background:linear-gradient(120deg,#229ED9,#1C7FB0);
+            border-radius:14px;padding:16px 22px;margin:6px 0 14px;box-shadow:0 6px 18px rgba(34,158,217,.25)">
+  <div style="font-size:40px;line-height:1">✈️</div>
+  <div style="flex:1;min-width:220px">
+    <div style="color:#fff;font-size:21px;font-weight:700">{html.escape(_bt(lang, "web_cta_title"))}</div>
+    <div style="color:#E6F4FB;font-size:15px;margin-top:2px">{html.escape(_bt(lang, "web_cta_sub"))}</div>
+  </div>
+  <div style="background:#fff;color:#1C7FB0;font-weight:700;border-radius:999px;padding:10px 20px;font-size:16px">
+    {html.escape(_bt(lang, "web_cta_btn"))} →</div>
+</div></a>""", unsafe_allow_html=True)
+
 cats = dict(CATS.get(lang, CATS["en"]))
 role = st.radio("category", list(cats), format_func=lambda c: cats[c], horizontal=True,
                 label_visibility="collapsed")
