@@ -26,11 +26,20 @@ HINDI_NUMBER_WORDS = {
 
 def facts_from_original(text):
     """Original text se saari tareekhein (ISO) aur numbers nikalo."""
+    text = re.sub(r"(?<=\d),(?=\d)", "", text)      # 2,774 ya 1,25,000 -> bina comma
     dates = set()
+    for day, month, year in re.findall(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b", text):
+        if 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+            dates.add(f"{year}-{int(month):02d}-{int(day):02d}")
+            dates.add(f"{int(month):02d}-{int(day):02d}")
     for day, month, year in re.findall(r"(\d{1,2})\s+([^\s\d,।]+)\s*,?\s+(\d{4})", text):
         m = HINDI_MONTHS.get(month) or EN_MONTHS.get(month.lower())
         if m:
             dates.add(f"{year}-{m:02d}-{int(day):02d}")
+    for day, month in re.findall(r"(\d{1,2})\s+([^\s\d,।]+)", text):     # "31 अक्टूबर" (bina saal)
+        m = HINDI_MONTHS.get(month) or EN_MONTHS.get(month.lower())
+        if m and 1 <= int(day) <= 31:
+            dates.add(f"{m:02d}-{int(day):02d}")
 
     numbers = set(re.findall(r"\d+", text))
     for word, digit in HINDI_NUMBER_WORDS.items():
@@ -42,11 +51,20 @@ def facts_from_original(text):
 def check(summary, dates, numbers):
     """Summary ki har tareekh aur number original mein hai ya nahi."""
     problems = []
+    month_days = {x[-5:] for x in dates}            # bina saal: "10-31"
     for d in summary.get("tareekh_iso", []):
-        if d not in dates:
-            problems.append(f"date {d} is not in the press release")
+        d = str(d).strip()
+        if d in dates:
+            continue
+        # AI ne saal nahi diya (1900-10-31 / --10-31) ya sirf saal (2026-01-01): din-mahina hi milao
+        if d[-5:] in month_days and (d.startswith(("1900", "0000", "-")) or len(d) == 5):
+            continue
+        if d.endswith("-01-01") and d[:4] in numbers:
+            continue
+        problems.append(f"date {d} is not in the press release")
 
     body = " ".join(str(summary.get(k, "")) for k in ("kya_hua", "aap_pe_asar", "kya_karna_hai"))
+    body = re.sub(r"(?<=\d),(?=\d)", "", body)
     for n in re.findall(r"\d+", body):
         if n not in numbers:
             problems.append(f"number {n} is not in the press release")

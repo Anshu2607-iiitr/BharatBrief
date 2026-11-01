@@ -14,6 +14,7 @@ from collector import already_saved, fetch_feed, fetch_page, fetch_text, get_pri
 from collector import setup_db as setup_releases
 from voice import text_to_speech, verified_summary, voice_script
 from trace_log import log_event
+from reminders import reminder_keyboard
 from audio_util import send_clip
 
 DB_FILE = "practice.db"
@@ -141,7 +142,8 @@ async def deliver(bot, deliveries, card_fn):
     for d in deliveries:
         try:
             await bot.send_message(d["uid"], card_fn(d["title"], d["link"], d["summary"]),
-                                   parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                                   parse_mode=ParseMode.HTML, disable_web_page_preview=True,
+                                   reply_markup=reminder_keyboard(d["prid"], d["summary"]))
             if d["audio"]:
                 await send_clip(bot, d["uid"], d["audio"], "Nayi khabar (AI awaaz)")
             mark_sent(d["uid"], d["prid"])

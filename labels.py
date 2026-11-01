@@ -85,3 +85,57 @@ _QA = {
 }
 for _code, _words in _QA.items():
     LABELS[_code].update(_words)
+
+
+# Safety: kisi bhasha mein koi shabd na ho to English wala use karo (crash nahi)
+for _code in LABELS:
+    for _key, _word in LABELS["en"].items():
+        LABELS[_code].setdefault(_key, _word)
+
+
+# Website ke baaki shabd: categories, ticker, 3D heading
+CATS = {
+    "hi": [("sabhi", "सभी खबरें"), ("student", "छात्र"), ("kisan", "किसान"), ("msme", "दुकान / MSME"), ("mahila", "महिला")],
+    "en": [("sabhi", "All news"), ("student", "Students"), ("kisan", "Farmers"), ("msme", "Shops / MSME"), ("mahila", "Women")],
+    "bn": [("sabhi", "সব খবর"), ("student", "ছাত্রছাত্রী"), ("kisan", "কৃষক"), ("msme", "দোকান / MSME"), ("mahila", "মহিলা")],
+    "ta": [("sabhi", "அனைத்து செய்திகள்"), ("student", "மாணவர்கள்"), ("kisan", "விவசாயிகள்"), ("msme", "கடைகள் / MSME"), ("mahila", "பெண்கள்")],
+    "te": [("sabhi", "అన్ని వార్తలు"), ("student", "విద్యార్థులు"), ("kisan", "రైతులు"), ("msme", "దుకాణాలు / MSME"), ("mahila", "మహిళలు")],
+    "mr": [("sabhi", "सर्व बातम्या"), ("student", "विद्यार्थी"), ("kisan", "शेतकरी"), ("msme", "दुकान / MSME"), ("mahila", "महिला")],
+}
+_UI = {
+    "hi": dict(hero="आज की बड़ी खबरें", latest="ताज़ा", hint="← घुमाएं · क्लिक करें →"),
+    "en": dict(hero="Today's top stories", latest="Latest", hint="← Drag · Click →"),
+    "bn": dict(hero="আজকের প্রধান খবর", latest="সর্বশেষ", hint="← ঘোরান · ক্লিক করুন →"),
+    "ta": dict(hero="இன்றைய முக்கியச் செய்திகள்", latest="சமீபத்திய", hint="← சுழற்றுங்கள் · கிளிக் செய்யுங்கள் →"),
+    "te": dict(hero="నేటి ముఖ్య వార్తలు", latest="తాజా", hint="← తిప్పండి · క్లిక్ చేయండి →"),
+    "mr": dict(hero="आजच्या मुख्य बातम्या", latest="ताज्या", hint="← फिरवा · क्लिक करा →"),
+}
+for _code, _words in _UI.items():
+    LABELS[_code].update(_words)
+
+# Safety: kisi bhasha mein koi shabd na ho to English wala (crash nahi)
+for _code in LABELS:
+    for _key, _word in LABELS["en"].items():
+        LABELS[_code].setdefault(_key, _word)
+
+
+# ---- AI se translate hue UI shabd (make_ui_labels.py) + saari bhashayein dropdown mein ----
+import json as _json
+import os as _os
+from languages import ALL as _ALL_LANGS
+
+if _os.path.exists("ui_labels_auto.json"):
+    with open("ui_labels_auto.json", encoding="utf-8") as _f:
+        _auto = _json.load(_f)
+    for _code, _d in _auto.items():
+        LABELS.setdefault(_code, {}).update({k: v for k, v in _d.items() if not k.startswith("cat_")})
+        CATS[_code] = [(k, _d.get("cat_" + k, v)) for k, v in CATS["en"]]
+
+LANGS.clear()
+for _code, _v in _ALL_LANGS.items():
+    if _code in LABELS:
+        LANGS[_v["native"]] = _code
+
+for _code in LABELS:
+    for _key, _word in LABELS["en"].items():
+        LABELS[_code].setdefault(_key, _word)

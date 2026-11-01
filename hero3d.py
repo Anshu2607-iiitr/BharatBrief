@@ -1,6 +1,7 @@
-﻿# 3D hero: aaj ki khabrein ek ghoomte 3D ring mein (CSS 3D + canvas, koi library nahi)
+# 3D hero: aaj ki khabrein ek ghoomte 3D ring mein (CSS 3D + canvas, koi library nahi)
 
 import base64
+import html
 import json
 import os
 
@@ -31,7 +32,9 @@ def hero_html(rows, lang, L, get_cached, audience_names):
         })
     labels = {k: L[k] for k in ("kya", "asar", "karna", "checked", "original", "listen", "explain")}
     safe = lambda obj: json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
-    return TEMPLATE.replace("__DATA__", safe(items)).replace("__LABELS__", safe(labels))
+    page = TEMPLATE.replace("आज की <span>बड़ी खबरें</span>", html.escape(L.get("hero", "आज की बड़ी खबरें")))
+    page = page.replace("← घुमाएं · Drag · Click →", html.escape(L.get("hint", "← Drag · Click →")))
+    return page.replace("__DATA__", safe(items)).replace("__LABELS__", safe(labels))
 
 
 TEMPLATE = r"""<!doctype html>

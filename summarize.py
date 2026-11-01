@@ -24,6 +24,9 @@ LANGUAGES = {
     "ml": "Malayalam", "or": "Odia", "pa": "Punjabi",
 }
 
+from languages import ALL as _ALL_LANGS
+LANGUAGES.update({c: v["en"] for c, v in _ALL_LANGS.items()})   # saari 23 bhashayein
+
 PROMPT = """You explain Indian government press releases to ordinary citizens.
 Write the summary in very simple {language}, the way you would explain it to a
 person in a village. Use the native script of {language}.

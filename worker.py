@@ -1,5 +1,7 @@
 ﻿# Lesson 15: Worker - website se alag, har UPDATE_MINUTES pakka update
 
+import os
+import threading
 import time
 from datetime import datetime
 
@@ -9,6 +11,10 @@ from trace_log import log_event
 
 def main():
     print(f"[worker] chalu: har {UPDATE_MINUTES} minute update. Band karne ke liye Ctrl+C", flush=True)
+    if os.environ.get("BB_WORKER"):                   # server pe: summary queue bhi yahin chale
+        import jobqueue
+        threading.Thread(target=jobqueue._loop, daemon=True, name="summary-queue").start()
+        print("[worker] summary queue bhi chalu", flush=True)
     while True:
         start = time.time()
         try:

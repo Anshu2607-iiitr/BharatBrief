@@ -10,15 +10,20 @@ import streamlit as st
 from alerts import cached_summary, setup_alert_tables
 from auto_updater import UPDATE_MINUTES, start_updater_once, update_once
 from collector import setup_db as setup_releases
-from labels import AUDIENCE, LABELS, LANGS, ROLES
+from labels import AUDIENCE, CATS, LABELS, LANGS, ROLES
+from translate import translated_titles
+from jobqueue import enqueue, job_status, start_queue_once
 import streamlit.components.v1 as components
 from hero3d import hero_html
 from qa import answer_question
+from reminders import bot_username, future_dates, ics_file
 from trace_log import _conn, simulate_pib_down
 from voice import text_to_speech, voice_script
 
 st.set_page_config(page_title="BharatBrief · सरकारी खबरें", page_icon="📰", layout="wide")
 start_updater_once()
+if not os.environ.get("BB_WORKER"):      # server pe queue worker.py chalata hai
+    start_queue_once()
 
 st.markdown("""
 <style>
@@ -99,6 +104,15 @@ def cached_only(prid, lang):
     return json.loads(row[0]) if row else None
 
 
+def original_excerpt(prid, chars=320):
+    """Summary banne tak: original release ki shuru ki lines."""
+    conn = setup_releases()
+    row = conn.execute("SELECT full_text FROM releases WHERE prid = ?", (prid,)).fetchone()
+    conn.close()
+    text = " ".join(p.strip() for p in (row[0] if row else "").split("\n") if len(p.strip()) > 40)
+    return text[:chars].rsplit(" ", 1)[0] + "…" if len(text) > chars else text
+
+
 def make_summary(prid, lang):
     conn = setup_releases()
     setup_alert_tables(conn)
@@ -134,7 +148,7 @@ def dateline(lang):
 def story(row, lang, L, lead=False):
     prid, title, link, posted, fetched, audience = row
     e = html.escape
-    kicker = AUDIENCE.get((audience or "").strip().lower(), "PIB")
+    kicker = dict(CATS.get(lang, CATS["en"])).get((audience or "").strip().lower(), "PIB")
     title_cls = "bb-lead-title" if lead else "bb-card-title"
     st.markdown(f'<div class="{"bb-lead" if lead else ""}"><div class="bb-kicker">{e(kicker)}</div>'
                 f'<div class="{title_cls}">{e(title)}</div>'
@@ -148,20 +162,17 @@ def story(row, lang, L, lead=False):
             st.session_state[key] = cached
     s = st.session_state.get(key)
 
-    if s is None:
-        if st.button(L["explain"], key=f"b_{prid}_{lang}", type="primary", use_container_width=True):
-            with st.status(L["working"], expanded=True) as status:
-                st.write("1. " + L["s1"])
-                s = make_summary(prid, lang)
-                status.update(label=L["done"] if s else L["retry"], state="complete" if s else "error",
-                              expanded=False)
-            st.session_state[key] = s or "fail"
-            st.rerun()
-    elif s == "fail":
-        st.info(L[fail_kind(prid)])
-        if st.button(L["retry"], key=f"r_{prid}_{lang}"):
-            del st.session_state[key]
-            st.rerun()
+    if s is None or s == "fail":
+        st.session_state.pop(key, None)
+        excerpt = original_excerpt(prid)
+        if excerpt:                                   # card kabhi khaali nahi: original ki pehli lines
+            st.markdown(f'<div class="bb-snippet">{e(excerpt)}</div>'
+                        f'<span class="bb-time">PIB · original</span>', unsafe_allow_html=True)
+        if job_status(prid, lang) == "failed":
+            st.caption(L["verify"])
+        else:
+            enqueue(prid, lang)                       # khud queue mein, user ko kuch nahi dabana
+            st.caption("⏳ " + L["working"])
     else:
         st.markdown(f'<div class="bb-snippet">{e(str(s.get("kya_hua", "")))}</div>'
                     f'<span class="bb-check">{e(L["checked"])}</span>', unsafe_allow_html=True)
@@ -181,12 +192,22 @@ def story(row, lang, L, lead=False):
                 st.rerun()
 
     if isinstance(s, dict):
+        for due in future_dates(s):
+            d = date.fromisoformat(due)
+            st.markdown(f'<div class="bb-sub">⏰ {e(L.get("rem_title", "आने वाली तारीख · Upcoming date"))}: {d:%d %b %Y}</div>', unsafe_allow_html=True)
+            c_a, c_b = st.columns(2)
+            c_a.download_button(L.get("cal", "📅 Calendar"), ics_file(prid, title, link, d), file_name=f"bharatbrief_{prid}_{due}.ics",
+                                mime="text/calendar", key=f"ics_{prid}_{due}_{lang}", use_container_width=True)
+            bot = bot_username()
+            if bot:
+                c_b.link_button(L.get("tg", "⏰ Telegram reminder"), f"https://t.me/{bot}?start=rem_{prid}_{d:%Y%m%d}", use_container_width=True)
+    if isinstance(s, dict):
         with st.form(f"q_{prid}_{lang}", border=False):
-            q = st.text_input(L["ask_ph"], key=f"qi_{prid}_{lang}", placeholder=L["ask_ph"],
+            q = st.text_input(L.get("ask_ph", "Ask about this news…"), key=f"qi_{prid}_{lang}", placeholder=L.get("ask_ph", "Ask about this news…"),
                               label_visibility="collapsed")
-            asked = st.form_submit_button(L["ask"])
+            asked = st.form_submit_button(L.get("ask", "Ask"))
         if asked and q.strip():
-            with st.spinner(L["thinking"]):
+            with st.spinner(L.get("thinking", "…")):
                 st.session_state[f"qa_{prid}_{lang}"] = answer_question(prid, q.strip(), lang)
         res = st.session_state.get(f"qa_{prid}_{lang}")
         if res and res.get("ok"):
@@ -194,25 +215,47 @@ def story(row, lang, L, lead=False):
             quotes = "".join(f'<div style="border-left:3px solid #0E6B50;padding:2px 10px;margin:4px 0;'
                              f'font-size:14px;color:#4A453E">¶{n}: {e(t[:260])}…</div>' for n, t in res["paras"])
             st.markdown(f'<div class="bb-snippet"><b>→</b> {e(res["answer"])}</div>'
-                        f'<div class="bb-time">{e(L["source"])} {nums}</div>{quotes}', unsafe_allow_html=True)
+                        f'<div class="bb-time">{e(L.get("source", "Source: paragraph"))} {nums}</div>{quotes}', unsafe_allow_html=True)
         elif res:
-            st.info(L["notfound"] if res.get("reason") == "notfound" else L["busy"])
+            st.info(L.get("notfound", "Not in this release.") if res.get("reason") == "notfound" else L["busy"])
     st.markdown(f'<a class="bb-link" href="{e(link)}" target="_blank">{e(L["original"])} ↗</a>',
                 unsafe_allow_html=True)
 
 
 # ---------- Page ----------
-top_l, top_r = st.columns([4, 1])
-lang = LANGS[top_r.selectbox("भाषा · Language", list(LANGS), label_visibility="collapsed")]
+# ---- Bhasha-patti: sabse upar, saari bhashayein, URL mein yaad (?lang=ta) ----
+_names = {c: n for n, c in LANGS.items()}
+_codes = list(_names)
+_start = st.query_params.get("lang", "hi")
+_start = _start if _start in _names else "hi"
+st.markdown('<div class="bb-langbar">🌐 भाषा चुनें · Choose your language</div>', unsafe_allow_html=True)
+if hasattr(st, "pills"):
+    lang = st.pills("lang", _codes, format_func=lambda c: _names[c], default=_start,
+                    selection_mode="single", label_visibility="collapsed") or _start
+else:
+    lang = st.radio("lang", _codes, index=_codes.index(_start), format_func=lambda c: _names[c],
+                    horizontal=True, label_visibility="collapsed")
+if st.query_params.get("lang") != lang:
+    st.query_params["lang"] = lang
+st.markdown("""<style>
+.bb-langbar { font-size:14px; font-weight:700; color:#0A4F3B; margin:0 0 4px; }
+[data-testid='stPills'] button, [data-testid='stButtonGroup'] button { border-radius:999px !important; }
+</style>""", unsafe_allow_html=True)
 L = LABELS[lang]
+from languages import RTL
+if lang in RTL:
+    st.markdown('<style>.bb-snippet,.bb-card-title,.bb-lead-title,.bb-sub,.bb-mast .tag'
+                '{direction:rtl;text-align:right}</style>', unsafe_allow_html=True)
 
 st.markdown(f'<div class="bb-mast"><div class="name">BharatBrief</div>'
             f'<div class="tag">{html.escape(L["tagline"])}</div></div>', unsafe_allow_html=True)
 
-role = ROLES[st.radio("category", list(ROLES), horizontal=True, label_visibility="collapsed")]
+cats = dict(CATS.get(lang, CATS["en"]))
+role = st.radio("category", list(cats), format_func=lambda c: cats[c], horizontal=True,
+                label_visibility="collapsed")
 
 
-@st.fragment(run_every=60)
+@st.fragment(run_every=30)
 def front_page(lang, role, L):
     last = last_fetch_time()
     st.markdown(f'<div class="bb-dateline"><span>{html.escape(dateline(lang))}</span>'
@@ -226,11 +269,13 @@ def front_page(lang, role, L):
     if not rows:
         st.info(L["none"])
         return
+    tr = translated_titles(rows, lang)                 # title bhi user ki bhasha mein
+    rows = [(r[0], tr.get(r[0], r[1])) + tuple(r[2:]) for r in rows]
 
     ticker = "".join(f"<span>● {html.escape(r[1])}</span>" for r in rows[:8])
-    st.markdown(f'<div class="bb-ticker"><div class="label">ताज़ा · Latest</div>'
+    st.markdown(f'<div class="bb-ticker"><div class="label">{html.escape(L.get("latest", "Latest"))}</div>'
                 f'<div class="track">{ticker}</div></div>', unsafe_allow_html=True)
-    components.html(hero_html(rows[:8], lang, L, cached_only, AUDIENCE), height=660)
+    components.html(hero_html(rows[:8], lang, L, cached_only, dict(CATS.get(lang, CATS["en"]))), height=660)
 
     with st.container(border=True):
         story(rows[0], lang, L, lead=True)

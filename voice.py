@@ -36,6 +36,16 @@ def verified_summary(prid, lang):
         return None
     _, title, text = row
     dates, numbers = facts_from_original(text)
+    try:                                   # release ki posted date bhi valid tareekh hai
+        import sqlite3
+        _c = sqlite3.connect("practice.db")
+        _r = _c.execute("SELECT posted_at FROM releases WHERE prid = ?", (prid,)).fetchone()
+        _c.close()
+        if _r and _r[0] and _r[0] != "unknown":
+            dates.add(_r[0][:10])
+            dates.add(_r[0][5:10])
+    except Exception:
+        pass
 
     feedback = ""
     for attempt in (1, 2):
