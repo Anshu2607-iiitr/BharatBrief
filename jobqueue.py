@@ -1,4 +1,4 @@
-﻿# Summary queue: ek-ek karke, AI limits ke hisaab se. User ko kabhi "busy, try again" nahi.
+# Summary queue: ek-ek karke, AI limits ke hisaab se. User ko kabhi "busy, try again" nahi.
 
 import sqlite3
 import threading
@@ -20,7 +20,7 @@ def _now():
 
 
 def _conn():
-    conn = sqlite3.connect(DB_FILE, timeout=10)
+    conn = sqlite3.connect(DB_FILE)
     conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
         prid TEXT, lang TEXT, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0,
         requested_at TEXT, started_at TEXT, PRIMARY KEY (prid, lang))""")
@@ -28,21 +28,26 @@ def _conn():
 
 
 def enqueue(prid, lang):
-    """Queue mein daalo. Pehle se hai to kuch nahi (jo pehle maanga, wo pehle banega)."""
-    conn = _conn()
-    # Naya request = time update, taaki jo abhi screen pe hai wo pehle bane
-    conn.execute("""INSERT INTO jobs (prid, lang, requested_at) VALUES (?, ?, ?)
-                    ON CONFLICT(prid, lang) DO UPDATE SET requested_at = excluded.requested_at
-                    WHERE jobs.status = 'pending'""", (prid, lang, _now()))
-    conn.commit()
-    conn.close()
+    """Queue mein daalo. Pehle se hai to kuch mat likho (har 30 sec 21 cards = DB pe bheed)."""
+    try:
+        conn = _conn()
+        if conn.execute("SELECT 1 FROM jobs WHERE prid = ? AND lang = ?", (prid, lang)).fetchone() is None:
+            conn.execute("INSERT OR IGNORE INTO jobs (prid, lang, requested_at) VALUES (?, ?, ?)",
+                         (prid, lang, _now()))
+            conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as err:          # DB busy: koi baat nahi, agle refresh pe phir daalenge
+        print("[queue] enqueue skip:", err)
 
 
 def job_status(prid, lang):
-    conn = _conn()
-    row = conn.execute("SELECT status FROM jobs WHERE prid = ? AND lang = ?", (prid, lang)).fetchone()
-    conn.close()
-    return row[0] if row else None
+    try:
+        conn = _conn()
+        row = conn.execute("SELECT status FROM jobs WHERE prid = ? AND lang = ?", (prid, lang)).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except sqlite3.OperationalError:
+        return None
 
 
 def _claim():
@@ -51,7 +56,7 @@ def _claim():
     stale = (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")
     conn.execute("UPDATE jobs SET status = 'pending' WHERE status = 'running' AND started_at < ?", (stale,))
     row = conn.execute("SELECT prid, lang FROM jobs WHERE status = 'pending' "
-                       "ORDER BY requested_at DESC, rowid LIMIT 1").fetchone()
+                       "ORDER BY requested_at, rowid LIMIT 1").fetchone()
     claimed = None
     if row:
         cur = conn.execute("UPDATE jobs SET status = 'running', started_at = ? "
@@ -93,7 +98,7 @@ def run_one():
 
 def _ai_was_busy():
     """Aakhri fail AI ke busy hone se tha (dono provider fail), ya sirf verify se?"""
-    conn = sqlite3.connect(DB_FILE, timeout=10)
+    conn = sqlite3.connect(DB_FILE)
     row = conn.execute("SELECT step, detail FROM events WHERE status = 'fail' ORDER BY rowid DESC LIMIT 1").fetchone()
     conn.close()
     return bool(row) and row[0] == "summary" and "dono fail" in (row[1] or "")
