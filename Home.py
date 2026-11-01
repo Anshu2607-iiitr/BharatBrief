@@ -1,4 +1,4 @@
-﻿# Website - news website jaisa layout: masthead, ticker, categories, lead story, grid
+# Website - news website jaisa layout: masthead, ticker, categories, lead story, grid
 
 import html
 import json
@@ -11,6 +11,8 @@ from alerts import cached_summary, setup_alert_tables
 from auto_updater import UPDATE_MINUTES, start_updater_once, update_once
 from collector import setup_db as setup_releases
 from labels import AUDIENCE, LABELS, LANGS, ROLES
+import streamlit.components.v1 as components
+from hero3d import hero_html
 from trace_log import _conn, simulate_pib_down
 from voice import text_to_speech, voice_script
 
@@ -210,6 +212,7 @@ def front_page(lang, role, L):
     ticker = "".join(f"<span>● {html.escape(r[1])}</span>" for r in rows[:8])
     st.markdown(f'<div class="bb-ticker"><div class="label">ताज़ा · Latest</div>'
                 f'<div class="track">{ticker}</div></div>', unsafe_allow_html=True)
+    components.html(hero_html(rows[:8], lang, L, cached_only, AUDIENCE), height=660)
 
     with st.container(border=True):
         story(rows[0], lang, L, lead=True)
