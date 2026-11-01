@@ -65,8 +65,21 @@ def check(summary, dates, numbers):
 
     body = " ".join(str(summary.get(k, "")) for k in ("kya_hua", "aap_pe_asar", "kya_karna_hai"))
     body = re.sub(r"(?<=\d),(?=\d)", "", body)
+
+    # Body mein likhi tareekhein (2026-11-03, 03/11/2026, 03.11.2026): original mein hai to theek, number check se hatao
+    def _date_ok(m):
+        y, mo, d = (m.group(1), m.group(2), m.group(3)) if len(m.group(1)) == 4 else (m.group(3), m.group(2), m.group(1))
+        iso = f"{y}-{int(mo):02d}-{int(d):02d}"
+        if iso in dates or (iso[5:] in month_days and iso[:4] in numbers):   # saal bhi original mein ho
+            return " "
+        problems.append(f"date {iso} is not in the press release")
+        return " "
+    body = re.sub(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", _date_ok, body)
+    body = re.sub(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b", _date_ok, body)
+
+    plain = {str(int(x)) for x in numbers if x.isdigit()}          # "03" aur "3" ek hi number
     for n in re.findall(r"\d+", body):
-        if n not in numbers:
+        if n not in numbers and str(int(n)) not in plain:
             problems.append(f"number {n} is not in the press release")
     return problems
 

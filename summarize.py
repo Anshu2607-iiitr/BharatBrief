@@ -81,37 +81,67 @@ def parse_json(raw):
     return None
 
 
-# ---------- Provider 1: Gemini ----------
+# ---------- Provider 1: Gemini - kai models, har model ka quota alag ----------
+# Pehla wala sabse achha; quota khatam to agla. Env GEMINI_FALLBACKS="a,b,c" se badal sakte ho.
+GEMINI_FALLBACKS = [m.strip() for m in os.environ.get(
+    "GEMINI_FALLBACKS",
+    "gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemma-4-26b-a4b-it",
+).split(",") if m.strip()]
+_gemini_resting = {}        # model -> kab tak mat poochho
+
+
+def _gemini_models():
+    return list(dict.fromkeys([m for m in [GEMINI_MODEL] + GEMINI_FALLBACKS if m]))
+
+
+def _gemini_once(client, model, contents, tries=3):
+    """Ek model: busy (503) pe thoda ruk ke retry. Return (text, 'ok'|'quota'|'gone'|'fail')."""
+    wait = 2
+    for attempt in range(1, tries + 1):
+        try:
+            cfg = {} if model.startswith("gemma") else {"response_mime_type": "application/json"}
+            resp = client.models.generate_content(model=model, contents=contents, config=cfg)
+            return resp.text, "ok"
+        except Exception as err:
+            msg = str(err)
+            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                return None, "quota"
+            if "404" in msg or "NOT_FOUND" in msg:
+                return None, "gone"
+            if any(code in msg for code in RETRY_CODES) and attempt < tries:
+                print(f"  Gemini {model} busy, {wait}s baad dobara ({attempt}/{tries})")
+                time.sleep(wait)
+                wait *= 2
+                continue
+            print(f"  Gemini {model} fail:", msg[:120])
+            return None, "fail"
+    return None, "fail"
+
+
 def call_gemini(contents, tries=3):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("  GEMINI_API_KEY set nahi hai")
         return None
     client = genai.Client(api_key=api_key, http_options={"timeout": 60000})
-
-    wait = 2
-    for attempt in range(1, tries + 1):
-        try:
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-                config={"response_mime_type": "application/json"},
-            )
-            return resp.text
-        except Exception as err:
-            busy = any(code in str(err) for code in RETRY_CODES)
-            if "quota" in str(err).lower():
-                busy = False      # daily quota khatam: retry bekaar, seedha backup pe jao
-            if busy and attempt < tries:
-                print(f"  Gemini busy hai, {wait}s baad dobara try ({attempt}/{tries})")
-                time.sleep(wait)
-                wait *= 2
-                continue
-            print("  Gemini fail:", str(err)[:200])
-            return None
+    for model in _gemini_models():
+        if _gemini_resting.get(model, 0) > time.time():
+            continue
+        text, status = _gemini_once(client, model, contents, tries)
+        if status == "ok":
+            global LAST_PROVIDER_MODEL
+            LAST_PROVIDER_MODEL = model
+            return text
+        if status == "quota":
+            _gemini_resting[model] = time.time() + 30 * 60      # 30 min baad phir dekhenge
+            print(f"  Gemini {model}: quota khatam, agla model")
+        elif status == "gone":
+            _gemini_resting[model] = time.time() + 24 * 3600    # model hi nahi hai
+    return None
 
 
 # ---------- Provider 2: Groq (backup) - kai models, ek ka quota khatam to agla ----------
+LAST_PROVIDER_MODEL = ""
 GROQ_FALLBACKS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
 _groq_resting = {}          # model -> kab tak mat poochho (time.time())
 
@@ -174,7 +204,6 @@ def call_groq(contents, json_mode=True):
     return None
 
 
-LAST_PROVIDER_MODEL = ""
 
 
 def summarize(title, text, lang_code):
