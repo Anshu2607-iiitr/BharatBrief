@@ -19,7 +19,7 @@ from hero3d import hero_html
 from qa import answer_question
 from reminders import bot_username, future_dates, ics_file
 from trace_log import _conn, simulate_pib_down
-from voice import text_to_speech, voice_script
+from voice import text_to_speech, voice_file, voice_script
 
 st.set_page_config(page_title="BharatBrief · सरकारी खबरें", page_icon="📰", layout="wide")
 if not os.environ.get("BB_WORKER"):       # server pe worker hi update karta hai
@@ -178,7 +178,7 @@ def story(row, lang, L, lead=False):
     else:
         st.markdown(f'<div class="bb-snippet">{e(str(s.get("kya_hua", "")))}</div>'
                     f'<span class="bb-check">{e(L["checked"])}</span>', unsafe_allow_html=True)
-        path = f"khabar_{prid}_{lang}.wav"
+        path = voice_file(prid, lang)
         if lead and os.path.exists(path):
             st.audio(path)
         with st.expander(f'{L["asar"]} · {L["karna"]}', expanded=lead):

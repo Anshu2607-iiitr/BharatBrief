@@ -12,7 +12,7 @@ from telegram.ext import CommandHandler
 
 from collector import already_saved, fetch_feed, fetch_page, fetch_text, get_prid, save
 from collector import setup_db as setup_releases
-from voice import text_to_speech, verified_summary, voice_script
+from voice import text_to_speech, verified_summary, voice_file, voice_script
 from trace_log import log_event
 from reminders import reminder_keyboard
 from audio_util import send_clip
@@ -78,9 +78,9 @@ def pending_releases(conn):
 
 def matching_users(conn, audience):
     if audience == "sabhi":
-        sql, args = "SELECT telegram_id, lang FROM users WHERE lang IS NOT NULL", ()
+        sql, args = "SELECT telegram_id, lang, COALESCE(voice, 'f') FROM users WHERE lang IS NOT NULL", ()
     else:
-        sql = "SELECT telegram_id, lang FROM users WHERE lang IS NOT NULL AND role IN (?, 'sabhi')"
+        sql = "SELECT telegram_id, lang, COALESCE(voice, 'f') FROM users WHERE lang IS NOT NULL AND role IN (?, 'sabhi')"
         args = (audience,)
     return conn.execute(sql, args).fetchall()
 
@@ -115,16 +115,16 @@ def run_once():
             continue
 
         audience = str(base.get("kiske_liye", "sabhi")).strip().lower()
-        users = [(u, l) for u, l in matching_users(conn, audience) if not already_sent(conn, u, prid)]
+        users = [(u, l, g) for u, l, g in matching_users(conn, audience) if not already_sent(conn, u, prid)]
         log_event(prid, "match", "ok", f"{audience} · {len(users)} users")
         print(f"[alert] {prid}: kiske_liye={audience}, users={len(users)}")
 
-        for uid, lang in users:
+        for uid, lang, g in users:
             s = base if lang == "hi" else cached_summary(conn, prid, lang)
             if not s:
                 continue
-            audio = f"khabar_{prid}_{lang}.wav"
-            if not os.path.exists(audio) and not text_to_speech(voice_script(s, lang), lang, audio):
+            audio = voice_file(prid, lang, g)
+            if not os.path.exists(audio) and not text_to_speech(voice_script(s, lang), lang, audio, g):
                 audio = None
             deliveries.append({"uid": uid, "prid": prid, "title": title,
                                "link": link, "summary": s, "audio": audio})

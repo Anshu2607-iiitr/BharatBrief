@@ -1,4 +1,4 @@
-﻿# Lesson 21: Subah ki digest - top 3 khabrein, ek voice note mein
+# Lesson 21: Subah ki digest - top 3 khabrein, ek voice note mein
 
 import asyncio
 import html
@@ -31,6 +31,8 @@ def _setup(conn):
     conn.execute("""CREATE TABLE IF NOT EXISTS digest_log (
         telegram_id INTEGER, day TEXT, PRIMARY KEY (telegram_id, day))""")
     cols = [r[1] for r in conn.execute("PRAGMA table_info(users)")]
+    if "voice" not in cols:                        # 👩 f / 👨 m
+        conn.execute("ALTER TABLE users ADD COLUMN voice TEXT DEFAULT 'f'")
     if "digest" not in cols:                       # naya column: 1 = chalu (default), 0 = band
         conn.execute("ALTER TABLE users ADD COLUMN digest INTEGER DEFAULT 1")
     conn.commit()
@@ -52,7 +54,7 @@ def top_releases(conn, role, hours=24):
     return sorted(rows, key=rank)                  # sorted() stable hai: same rank mein naya pehle
 
 
-def build_digest(conn, lang, role):
+def build_digest(conn, lang, role, gender="f"):
     """(text, wav_path ya None). Summary na bane to agli khabar try karo."""
     items = []
     for prid, title, link, _ in top_releases(conn, role):
@@ -74,17 +76,17 @@ def build_digest(conn, lang, role):
     text = "\n".join(lines)
 
     day = datetime.now(IST).strftime("%Y%m%d")
-    wav = f"digest_{day}_{lang}_{role or 'sabhi'}.wav"
+    wav = f"digest_{day}_{lang}_{role or 'sabhi'}_{gender}.wav"
     if not os.path.exists(wav):
         script = " ".join(voice_parts)[:1400]      # TTS ki lambai limit ke andar
-        if not text_to_speech(script, lang, wav):
+        if not text_to_speech(script, lang, wav, gender):
             wav = None
     return text, wav
 
 
 def digest_users(conn, day):
     return conn.execute("""
-        SELECT telegram_id, lang, role FROM users
+        SELECT telegram_id, lang, role, COALESCE(voice, 'f') FROM users
         WHERE lang IS NOT NULL AND COALESCE(digest, 1) = 1
           AND telegram_id NOT IN (SELECT telegram_id FROM digest_log WHERE day = ?)""", (day,)).fetchall()
 
@@ -92,10 +94,10 @@ def digest_users(conn, day):
 async def send_digest(bot, users, day, force=False):
     conn = setup_releases()
     _setup(conn)
-    made = {}                                      # (lang, role) -> (text, wav): ek baar banao, sabko bhejo
+    made = {}                                      # (lang, role, awaaz) -> (text, wav): ek baar banao, sabko bhejo
     sent = 0
-    for uid, lang, role in users:
-        k = (lang, (role or "").lower())
+    for uid, lang, role, *rest in users:
+        k = (lang, (role or "").lower(), rest[0] if rest else "f")
         if k not in made:
             made[k] = await asyncio.to_thread(build_digest, conn, *k)
         text, wav = made[k]
@@ -142,7 +144,7 @@ def register_digest(app):
             conn.commit(); conn.close()
             await update.message.reply_text(f"🔔 Har subah {DIGEST_HOUR} baje digest aayegi.")
             return
-        row = conn.execute("SELECT telegram_id, lang, role FROM users WHERE telegram_id = ?", (uid,)).fetchone()
+        row = conn.execute("SELECT telegram_id, lang, role, COALESCE(voice, 'f') FROM users WHERE telegram_id = ?", (uid,)).fetchone()
         conn.close()
         if not row or not row[1]:
             await update.message.reply_text("Pehle /start se bhasha chuno.")

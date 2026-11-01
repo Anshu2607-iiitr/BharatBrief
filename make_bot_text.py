@@ -21,7 +21,22 @@ Reply ONLY with the JSON object.
 {payload}"""
 
 
-def ok(en, tr):
+# Har bhasha ki lipi (Unicode range). AI kabhi-kabhi doosri lipi ke akshar mila deta hai.
+SCRIPT = {"hi": (0x0900, 0x097F), "mr": (0x0900, 0x097F), "bn": (0x0980, 0x09FF), "pa": (0x0A00, 0x0A7F),
+          "gu": (0x0A80, 0x0AFF), "or": (0x0B00, 0x0B7F), "ta": (0x0B80, 0x0BFF), "te": (0x0C00, 0x0C7F),
+          "kn": (0x0C80, 0x0CFF), "ml": (0x0D00, 0x0D7F)}
+
+
+def same_script(lang, text):
+    if lang not in SCRIPT:
+        return True
+    lo, hi = SCRIPT[lang]
+    return all(c.isascii() or not c.isalpha() or lo <= ord(c) <= hi for c in text)
+
+
+def ok(en, tr, lang=None):
+    if not same_script(lang, tr):
+        return False                                          # doosri lipi ke akshar mile
     lead = re.match(r"^\W+", en)
     if lead and not tr.startswith(lead.group(0).strip()):
         return False                                          # button emoji badal gaya
@@ -36,7 +51,11 @@ def main(langs):
         if not language:
             print(lang, ": bhasha nahi pata")
             continue
-        payload = json.dumps(en, ensure_ascii=False, indent=1)
+        todo = {k: v for k, v in en.items() if k not in out.get(lang, {})}   # sirf jo missing hain
+        if not todo:
+            print(lang, ": sab pehle se theek")
+            continue
+        payload = json.dumps(todo, ensure_ascii=False, indent=1)
         res = None
         for call in (call_gemini, call_groq):
             res = parse_json(call(PROMPT.format(language=language, payload=payload)))
@@ -45,10 +64,10 @@ def main(langs):
         if not isinstance(res, dict):
             print(lang, ": AI se nahi bana")
             continue
-        good = {k: v for k, v in res.items() if k in en and isinstance(v, str) and ok(en[k], v)}
-        bad = sorted(set(en) - set(good))
-        out[lang] = good
-        print(f"{lang}: {len(good)}/{len(en)} theek" + (f", English rahega: {bad}" if bad else ""))
+        good = {k: v for k, v in res.items() if k in todo and isinstance(v, str) and ok(en[k], v, lang)}
+        out.setdefault(lang, {}).update(good)
+        bad = sorted(set(todo) - set(good))
+        print(f"{lang}: {len(good)}/{len(todo)} naye theek" + (f", English rahega: {bad}" if bad else ""))
         json.dump(out, open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         time.sleep(4)
 

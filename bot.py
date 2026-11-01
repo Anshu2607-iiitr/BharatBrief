@@ -27,7 +27,7 @@ from labels import LABELS, ROLES as ROLE_MAP
 from languages import ALL as ALL_LANGS
 from qa import answer_question, last_sent_prid
 from reminders import add_reminder, future_dates, parse_deeplink, register_reminders
-from voice import text_to_speech, voice_script
+from voice import text_to_speech, voice_file, voice_script
 from voice_input import transcribe
 from translate import translated_titles
 
@@ -59,9 +59,9 @@ def save_field(user_id, field, value):
 
 
 def get_user(user_id):
-    """(role, lang, digest) ya None."""
+    """(role, lang, digest, voice) ya None."""
     conn = sqlite3.connect(DB_FILE)
-    row = conn.execute("SELECT role, lang, COALESCE(digest, 1) FROM users WHERE telegram_id = ?",
+    row = conn.execute("SELECT role, lang, COALESCE(digest, 1), COALESCE(voice, 'f') FROM users WHERE telegram_id = ?",
                        (user_id,)).fetchone()
     conn.close()
     return row
@@ -70,6 +70,19 @@ def get_user(user_id):
 def lang_of(user_id):
     row = get_user(user_id)
     return row[1] if row and row[1] else "hi"
+
+
+def voice_of(user_id):
+    row = get_user(user_id)
+    return row[3] if row else "f"
+
+
+def toggle_voice(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("UPDATE users SET voice = CASE WHEN COALESCE(voice, 'f') = 'f' THEN 'm' ELSE 'f' END "
+                 "WHERE telegram_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
 
 
 def toggle_digest(user_id):
@@ -190,9 +203,10 @@ async def send_news(context, chat_id, uid):
     await asyncio.to_thread(mark_sent, uid, prid)   # alert mein dobara na aaye; sawaal isi pe
 
     if ALL_LANGS.get(lang, {}).get("voice"):
-        path = f"khabar_{prid}_{lang}.wav"
+        g = row[3] if row else "f"
+        path = voice_file(prid, lang, g)
         await context.bot.send_chat_action(chat_id, ChatAction.RECORD_VOICE)
-        ok = os.path.exists(path) or await asyncio.to_thread(text_to_speech, voice_script(s, lang), lang, path)
+        ok = os.path.exists(path) or await asyncio.to_thread(text_to_speech, voice_script(s, lang), lang, path, g)
         if ok:
             await send_clip(context.bot, chat_id, path, title[:60])
 
@@ -215,7 +229,7 @@ async def answer(update, context, question, lang, by_voice=False):
                                         parse_mode=ParseMode.HTML, disable_web_page_preview=True)
         if by_voice and ALL_LANGS.get(lang, {}).get("voice"):      # bol ke poochha -> jawab bhi awaaz mein
             path = os.path.join(tempfile.gettempdir(), f"ans_{uid}_{int(time.time())}.wav")
-            if await asyncio.to_thread(text_to_speech, res["answer"], lang, path):
+            if await asyncio.to_thread(text_to_speech, res["answer"], lang, path, voice_of(uid)):
                 await send_clip(context.bot, update.effective_chat.id, path, "💬")
                 try:
                     os.remove(path)
@@ -268,14 +282,16 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row or not row[1]:
         await start(update, context)
         return
-    role, lang, digest_on = row
+    role, lang, digest_on, g = row
     text = (f"<b>{t(lang, 'settings')}</b>\n\n"
             f"🌐 {t(lang, 'lang')}: {html.escape(label_of(LANGS, lang))}\n"
             f"👤 {t(lang, 'role')}: {html.escape(label_of(ROLES, role))}\n"
-            f"🌅 {t(lang, 'digest')}: {t(lang, 'on' if digest_on else 'off')}")
+            f"🌅 {t(lang, 'digest')}: {t(lang, 'on' if digest_on else 'off')}\n"
+            f"🗣️ {t(lang, 'voice')}: {t(lang, 'male' if g == 'm' else 'female')}")
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "set_lang"), callback_data="set:lang"),
                                 InlineKeyboardButton(t(lang, "set_role"), callback_data="set:role")],
-                               [InlineKeyboardButton(t(lang, "set_digest"), callback_data="set:digest")]])
+                               [InlineKeyboardButton(t(lang, "set_voice"), callback_data="set:voice"),
+                                InlineKeyboardButton(t(lang, "set_digest"), callback_data="set:digest")]])
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
@@ -285,10 +301,10 @@ async def digest_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row or not row[1]:
         await start(update, context)
         return
-    role, lang, _ = row
+    role, lang, _, g = row
     await update.message.reply_text(t(lang, "preparing"))
     day = datetime.now(IST).strftime("%Y-%m-%d")
-    if not await send_digest(context.bot, [(uid, lang, role)], day, force=True):
+    if not await send_digest(context.bot, [(uid, lang, role, g)], day, force=True):
         await update.message.reply_text(t(lang, "no_more"), reply_markup=main_menu(lang))
 
 
@@ -338,6 +354,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif value == "digest":
             toggle_digest(uid)
             await settings(update, context)
+        elif value == "voice":                        # 👩 <-> 👨, aur ek chhota sample sunao
+            toggle_voice(uid)
+            await settings(update, context)
+            g = voice_of(uid)
+            sample = f"voice_sample_{lang}_{g}.wav"
+            if ALL_LANGS.get(lang, {}).get("voice") and (os.path.exists(sample) or await asyncio.to_thread(
+                    text_to_speech, t(lang, "voice_hello"), lang, sample, g)):
+                await send_clip(context.bot, q.message.chat_id, sample, "🗣️")
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):

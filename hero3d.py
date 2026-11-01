@@ -9,7 +9,7 @@ import os
 def _audio_data(prid, lang):
     """Awaaz file ho to page ke andar hi daal do (chhoti files hi)."""
     for ext, mime in ((".ogg", "audio/ogg"), (".wav", "audio/wav")):
-        path = f"khabar_{prid}_{lang}{ext}"
+        path = f"khabar_{prid}_{lang}_f{ext}"
         if os.path.exists(path) and os.path.getsize(path) < 900_000:
             with open(path, "rb") as f:
                 return f"data:{mime};base64," + base64.b64encode(f.read()).decode()

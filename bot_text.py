@@ -35,6 +35,8 @@ T = {
         "web_cta_title": "Telegram पर पाइए, आवाज़ में",
         "web_cta_sub": "हर सुबह 3 बड़ी खबरें • बोलकर सवाल पूछिए • तारीख का रिमाइंडर • मुफ़्त",
         "web_cta_btn": "Telegram खोलें",
+        "voice": "आवाज़", "female": "👩 महिला", "male": "👨 पुरुष", "set_voice": "🗣️ आवाज़ बदलें",
+        "voice_hello": "नमस्ते! अब से आपकी खबरें इस आवाज़ में आएँगी।",
     },
     "en": {
         "choose_lang": "🌐 अपनी भाषा चुनें · Choose your language",
@@ -69,6 +71,8 @@ T = {
         "web_cta_title": "Get it on Telegram, by voice",
         "web_cta_sub": "Top 3 stories every morning • Ask by speaking • Date reminders • Free",
         "web_cta_btn": "Open Telegram",
+        "voice": "Voice", "female": "👩 Female", "male": "👨 Male", "set_voice": "🗣️ Change voice",
+        "voice_hello": "Hello! From now on, your news will come in this voice.",
     },
 }
 

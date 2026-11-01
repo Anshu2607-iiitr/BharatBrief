@@ -14,6 +14,15 @@ from verify import facts_from_original, check
 SARVAM_URL = "https://api.sarvam.ai/text-to-speech"
 SARVAM_MODEL = os.environ.get("SARVAM_TTS_MODEL", "bulbul:v3")
 
+# Do awaazein: user Setting mein chunta hai. Env se badal sakte ho (Sarvam ke 37 speakers mein se koi bhi).
+VOICES = {"f": os.environ.get("SARVAM_FEMALE", "priya"), "m": os.environ.get("SARVAM_MALE", "rahul")}
+
+
+def voice_file(prid, lang, gender="f"):
+    """Har khabar + bhasha + awaaz ki alag file (cache)."""
+    return f"khabar_{prid}_{lang}_{gender if gender in VOICES else 'f'}.wav"
+
+
 # Hamare code -> Sarvam ka language code
 LANG_CODES = {
     "hi": "hi-IN", "en": "en-IN", "bn": "bn-IN", "ta": "ta-IN", "te": "te-IN",
@@ -77,7 +86,7 @@ def voice_script(summary, lang):
     return " ".join(p for p in parts if p)
 
 
-def text_to_speech(text, lang, out_path):
+def text_to_speech(text, lang, out_path, gender="f"):
     key = os.environ.get("SARVAM_API_KEY")
     if not key:
         print("SARVAM_API_KEY set nahi hai.")
@@ -90,6 +99,7 @@ def text_to_speech(text, lang, out_path):
         "text": text[:1500],                     # bahut lamba text na bhejein
         "target_language_code": LANG_CODES[lang],
         "model": SARVAM_MODEL,
+        "speaker": VOICES.get(gender, VOICES["f"]),
     }
     try:
         resp = requests.post(SARVAM_URL, json=body,
