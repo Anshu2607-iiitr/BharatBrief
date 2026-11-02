@@ -74,7 +74,7 @@ def git_pushed():
         return False, "commit hai par push nahi hua: git push"
     if changed:
         return False, "badli hui files live pe nahi: " + ", ".join(changed[:6])
-    return True, "live code = laptop ka code"
+    return True, "GitHub = laptop. Auto-Deploy band hai: Render pe 'Deploy latest commit' kiya?"
 
 
 if __name__ == "__main__":
